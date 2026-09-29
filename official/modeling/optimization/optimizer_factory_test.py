@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,9 +13,10 @@
 # limitations under the License.
 
 """Tests for optimizer_factory.py."""
+import math
 from absl.testing import parameterized
 import numpy as np
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 from official.modeling.optimization import optimizer_factory
 from official.modeling.optimization.configs import optimization_config
@@ -68,6 +69,9 @@ class OptimizerFactoryTest(tf.test.TestCase, parameterized.TestCase):
     expected_optimizer_config['learning_rate'] = 0.1
 
     opt_config = optimization_config.OptimizationConfig(params)
+    if optimizer_type == 'sgd':
+      # Delete unsupported arg `decay` from SGDConfig.
+      delattr(opt_config.optimizer.sgd, 'decay')
     opt_factory = optimizer_factory.OptimizerFactory(opt_config)
     lr = opt_factory.build_learning_rate()
     optimizer = opt_factory.build_optimizer(
@@ -96,7 +100,7 @@ class OptimizerFactoryTest(tf.test.TestCase, parameterized.TestCase):
     zero_grads = lambda gv: [(tf.zeros_like(g), v) for g, v in gv]
 
     optimizer = opt_factory.build_optimizer(lr, gradient_aggregator=zero_grads)
-    if isinstance(optimizer, tf.keras.optimizers.experimental.Optimizer):
+    if isinstance(optimizer, tf_keras.optimizers.experimental.Optimizer):
       self.skipTest('New Keras optimizer does not support '
                     '`gradient_aggregator` arg.')
 
@@ -326,6 +330,41 @@ class OptimizerFactoryTest(tf.test.TestCase, parameterized.TestCase):
     }
     expected_lr_step_values = [[0, 0.1], [250, 0.08535534], [500, 0.04999999],
                                [750, 0.01464466], [1000, 0]]
+    opt_config = optimization_config.OptimizationConfig(params)
+    opt_factory = optimizer_factory.OptimizerFactory(opt_config)
+    lr = opt_factory.build_learning_rate()
+
+    for step, value in expected_lr_step_values:
+      self.assertAlmostEqual(lr(step).numpy(), value)
+
+  def test_cosine_restarts_lr_schedule(self):
+    params = {
+        'optimizer': {
+            'type': 'sgd',
+            'sgd': {
+                'momentum': 0.9
+            }
+        },
+        'learning_rate': {
+            'type': 'cosine_restarts',
+            'cosine_restarts': {
+                'initial_learning_rate': 0.1,
+                'first_decay_steps': 1000,
+                't_mul': 0.75,
+                'm_mul': 0.5
+            }
+        }
+    }
+    expected_lr_step_values = [
+        # Period 1: length 1000.
+        [0, 0.1],
+        [250, 0.1 * (1.0 + math.cos(math.pi * 250.0 / 1000.0)) / 2.0],
+        [500, 0.1 * (1.0 + math.cos(math.pi * 500.0 / 1000.0)) / 2.0],
+        [750, 0.1 * (1.0 + math.cos(math.pi * 750.0 / 1000.0)) / 2.0],
+        # Period 2: length 750, starts at 1000 with init_lr = 0.1 * 0.5 = 0.05.
+        [1000, 0.05],
+        [1250, 0.05 * (1.0 + math.cos(math.pi * 250.0 / 750.0)) / 2.0],
+    ]
     opt_config = optimization_config.OptimizationConfig(params)
     opt_factory = optimizer_factory.OptimizerFactory(opt_config)
     lr = opt_factory.build_learning_rate()

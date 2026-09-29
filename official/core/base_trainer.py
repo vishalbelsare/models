@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ from typing import Union, Optional
 from absl import logging
 import gin
 import orbit
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 from official.core import base_task
 from official.core import config_definitions
@@ -47,10 +47,19 @@ class _AsyncTrainer(orbit.StandardTrainer, orbit.StandardEvaluator):
           tf.distribute.experimental.coordinator.ClusterCoordinator(
               self._strategy))
 
+  def coordinator_for_async(
+      self,
+  ) -> tf.distribute.experimental.coordinator.ClusterCoordinator:
+    if not self._coordinator:
+      raise ValueError(
+          "Coordinator uninitialized for async run. Call init_async() first."
+      )
+    return self._coordinator
+
   def join(self):
     """Join all async steps. Only useful in aysnc training."""
     if getattr(self, "_is_async", False):
-      self._coordinator.join()
+      self.coordinator_for_async().join()
 
   def create_train_loop_fn(self):
     """Creates a eval loop from the given step function and options."""
@@ -58,7 +67,9 @@ class _AsyncTrainer(orbit.StandardTrainer, orbit.StandardEvaluator):
     if getattr(self, "_is_async", False):
 
       def _async_loop_fn(iterator, num_steps):
-        self._coordinator.schedule(train_loop_fn, args=(iterator, num_steps))
+        self.coordinator_for_async().schedule(
+            train_loop_fn, args=(iterator, num_steps)
+        )
 
       return _async_loop_fn
     else:
@@ -76,7 +87,9 @@ class _AsyncTrainer(orbit.StandardTrainer, orbit.StandardEvaluator):
       def _async_loop_fn(iterator, num_steps, state=None, reduce_fn=None):
         assert state is None
         assert reduce_fn is None
-        self._coordinator.schedule(eval_loop_fn, args=(iterator, num_steps))
+        self.coordinator_for_async().schedule(
+            eval_loop_fn, args=(iterator, num_steps)
+        )
 
       return _async_loop_fn
     else:
@@ -102,7 +115,9 @@ class _AsyncTrainer(orbit.StandardTrainer, orbit.StandardEvaluator):
           *args, **kwargs)
       per_worker_dataset_fn = tf.function(per_worker_dataset_fn)
 
-      return self._coordinator.create_per_worker_dataset(per_worker_dataset_fn)
+      return self.coordinator_for_async().create_per_worker_dataset(
+          per_worker_dataset_fn
+      )
     else:
       return orbit.utils.make_distributed_dataset(self._strategy, dataset_or_fn,
                                                   *args, **kwargs)
@@ -127,7 +142,7 @@ class Trainer(_AsyncTrainer):
       self,
       config: ExperimentConfig,
       task: base_task.Task,
-      model: tf.keras.Model,
+      model: tf_keras.Model,
       optimizer: tf.optimizers.Optimizer,
       train: bool = True,
       evaluate: bool = True,
@@ -141,7 +156,7 @@ class Trainer(_AsyncTrainer):
     Args:
       config: An `ExperimentConfig` instance specifying experiment config.
       task: A base_task.Task instance.
-      model: The model instance, e.g. a tf.keras.Model instance.
+      model: The model instance, e.g. a tf_keras.Model instance.
       optimizer: tf.optimizers.Optimizer instance.
       train: bool, whether or not this trainer will be used for training.
         default to True.
@@ -192,8 +207,8 @@ class Trainer(_AsyncTrainer):
         optimizer=self.optimizer,
         **checkpoint_items)
 
-    self._train_loss = tf.keras.metrics.Mean("training_loss", dtype=tf.float32)
-    self._validation_loss = tf.keras.metrics.Mean(
+    self._train_loss = tf_keras.metrics.Mean("training_loss", dtype=tf.float32)
+    self._validation_loss = tf_keras.metrics.Mean(
         "validation_loss", dtype=tf.float32)
     model_metrics = model.metrics if hasattr(model, "metrics") else []
 
@@ -343,6 +358,28 @@ class Trainer(_AsyncTrainer):
       logs["learning_rate"] = self.optimizer.learning_rate
     return logs
 
+  def next_train_inputs(self, iterator):
+    """Fetches the next inputs for the model during train.
+
+    This method consumes the input iterator and returns the next inputs for the
+    model.
+
+    This method provides a way to control how to fetch the next model input, and
+    what data to send to the model.
+
+    Note: This function runs on the host side when accelerators are used.
+
+    Note: Depending on the training setup this may or may not run in eager mode.
+    In most cases it will be run in graph mode.
+
+    Args:
+      iterator: Dataset iterator to generate the next inputs from.
+
+    Returns:
+      The inputs to the model.
+    """
+    return next(iterator)
+
   def train_step(self, iterator):
     """See base class."""
 
@@ -359,8 +396,8 @@ class Trainer(_AsyncTrainer):
       self._train_loss.update_state(logs[self.task.loss])
       self.global_step.assign_add(1)
 
-    self.strategy.run(
-        step_fn, args=(next(iterator),), options=self._runtime_options)
+    inputs = self.next_train_inputs(iterator)
+    self.strategy.run(step_fn, args=(inputs,), options=self._runtime_options)
 
   def eval_begin(self):
     """Sets up metrics."""
@@ -370,6 +407,31 @@ class Trainer(_AsyncTrainer):
     if self.optimizer and isinstance(self.optimizer,
                                      optimization.ExponentialMovingAverage):
       self.optimizer.swap_weights()
+
+  def next_eval_inputs(self, iterator):
+    """Fetches the next inputs for the model during eval.
+
+    This method consumes the input iterator and returns the next inputs for the
+    model and an additional logs dict. The output dict remains in the host (not
+    sent to GPUs/TPUs) and is merged with the model outputs which will be
+    processed later in `aggregate_logs`. This is useful for sending extra logs
+    downstream that are not compatible with the accelerators.
+
+    Note: This function runs on the host side when accelerators are used.
+
+    Note: Depending on the training setup this may or may not run in eager mode.
+    In most cases it will be run in graph mode.
+
+    Args:
+      iterator: Dataset iterator to generate the next inputs from.
+
+    Returns:
+      The inputs to the model, and an additional logs dictionnary. The logs
+      are not passed to the model, instead they are merged with model output
+      logs.
+    """
+    passthrough_logs = dict()
+    return next(iterator), passthrough_logs
 
   def eval_step(self, iterator):
     """See base class."""
@@ -381,11 +443,26 @@ class Trainer(_AsyncTrainer):
         self._validation_loss.update_state(logs[self.task.loss])
       return logs
 
-    distributed_outputs = self.strategy.run(step_fn, args=(next(iterator),))
-    return tf.nest.map_structure(self.strategy.experimental_local_results,
-                                 distributed_outputs)
+    inputs, passthrough_logs = self.next_eval_inputs(iterator)
+    distributed_outputs = self.strategy.run(step_fn, args=(inputs,))
+    logs = tf.nest.map_structure(
+        self.strategy.experimental_local_results, distributed_outputs
+    )
 
-  def eval_end(self, aggregated_logs=None):
+    if set(logs.keys()) & set(passthrough_logs.keys()):
+      logging.warning(
+          (
+              "Conflict between the pasthrough log keys and the returned model"
+              " log keys. Found %r keys in the passthrough logs and %r keys in"
+              " the model logs. Model log keys takes precedence."
+          ),
+          logs.keys(),
+          passthrough_logs.keys(),
+      )
+
+    return {**passthrough_logs, **logs}
+
+  def eval_end(self, aggregated_logs=None):  # pyrefly: ignore[bad-override]
     """Processes evaluation results."""
     self.join()
     logs = {}

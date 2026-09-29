@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 """Video classification configuration definition."""
 import dataclasses
 from typing import Optional, Tuple
-from absl import flags
 
 from official.core import config_definitions as cfg
 from official.core import exp_factory
@@ -23,7 +22,6 @@ from official.modeling import hyperparams
 from official.modeling import optimization
 from official.vision.configs import common
 
-FLAGS = flags.FLAGS
 
 YT8M_TRAIN_EXAMPLES = 3888919
 YT8M_VAL_EXAMPLES = 1112356
@@ -48,12 +46,14 @@ class DataConfig(cfg.DataConfig):
     label_fields: name of field to read from tf.SequenceExample.
     segment_size: Number of frames in each segment.
     segment_labels: Use segment level label. Default: False, video level label.
-    include_video_id: `True` means include video id (string) in the input to
-      the model.
+    include_video_id: `True` means include video id (string) in the input to the
+      model.
     temporal_stride: Not used. Need to deprecated.
     max_frames: Maxim Number of frames in a input example. It is used to crop
       the input in the temporal dimension.
-    num_frames: Number of frames in a single input example.
+    sample_random_frames: If sample random frames or random sequence.
+    num_sample_frames: Number of frames to sample for each input example. No
+      frame sampling if None.
     num_classes: Number of classes to classify. Assuming it is a classification
       task.
     num_devices: Not used. To be deprecated.
@@ -76,8 +76,13 @@ class DataConfig(cfg.DataConfig):
   segment_labels: bool = False
   include_video_id: bool = False
   temporal_stride: int = 1
-  max_frames: int = 300
-  num_frames: int = 300  # set smaller to allow random sample (Parser)
+  max_frames: int = 300  # Cap input frames.
+  sample_random_frames: bool = True
+  # Sample random frames if not None. No sampling in inference.
+  num_sample_frames: Optional[int] = 300
+  input_per_feature_l2_norm: bool = False
+  prefetch_buffer_size: int = 100
+  shuffle_buffer_size: int = 100
   num_classes: int = 3862
   num_devices: int = 1
   input_path: str = ''
@@ -90,7 +95,6 @@ def yt8m(is_training):
   """YT8M dataset configs."""
   # pylint: disable=unexpected-keyword-arg
   return DataConfig(
-      num_frames=30,
       temporal_stride=1,
       segment_labels=False,
       segment_size=5,
@@ -103,28 +107,70 @@ def yt8m(is_training):
 
 
 @dataclasses.dataclass
-class MoeModel(hyperparams.Config):
-  """The model config."""
-  num_mixtures: int = 5
-  l2_penalty: float = 1e-5
-  use_input_context_gate: bool = False
-  use_output_context_gate: bool = False
-
-
-@dataclasses.dataclass
 class DbofModel(hyperparams.Config):
   """The model config."""
   cluster_size: int = 3000
   hidden_size: int = 2000
   add_batch_norm: bool = True
-  sample_random_frames: bool = True
+  pooling_method: str = 'average'
   use_context_gate_cluster_layer: bool = False
   context_gate_cluster_bottleneck_size: int = 0
-  pooling_method: str = 'average'
-  yt8m_agg_classifier_model: str = 'MoeModel'
-  agg_model: hyperparams.Config = MoeModel()
-  norm_activation: common.NormActivation = common.NormActivation(
-      activation='relu', use_sync_bn=False)
+
+
+@dataclasses.dataclass
+class Backbone(hyperparams.OneOfConfig):
+  """Configuration for backbones.
+
+  Attributes:
+    type: 'str', type of backbone be used, one of the fields below.
+    dbof: dbof backbone config.
+  """
+  type: Optional[str] = None
+  dbof: DbofModel = dataclasses.field(default_factory=DbofModel)
+
+
+@dataclasses.dataclass
+class MoeModel(hyperparams.Config):
+  """The MoE model config."""
+
+  num_mixtures: int = 5
+  vocab_as_last_dim: bool = False
+  use_input_context_gate: bool = False
+  use_output_context_gate: bool = False
+
+
+@dataclasses.dataclass
+class LogisticModel(hyperparams.Config):
+  """The logistic model config."""
+  return_logits: bool = False
+
+
+@dataclasses.dataclass
+class Head(hyperparams.OneOfConfig):
+  """Configuration for aggreagation heads.
+
+  Attributes:
+    type: 'str', type of head be used, one of the fields below.
+    moe: MoE head config.
+    logistic: Logistic head config.
+  """
+  type: Optional[str] = None
+  moe: MoeModel = dataclasses.field(default_factory=MoeModel)
+  logistic: LogisticModel = dataclasses.field(default_factory=LogisticModel)
+
+
+@dataclasses.dataclass
+class VideoClassificationModel(hyperparams.Config):
+  """The classifier model config."""
+  backbone: Backbone = dataclasses.field(
+      default_factory=lambda: Backbone(type='dbof')
+  )
+  head: Head = dataclasses.field(default_factory=lambda: Head(type='moe'))
+  norm_activation: common.NormActivation = dataclasses.field(
+      default_factory=lambda: common.NormActivation(  # pylint: disable=g-long-lambda
+          activation='relu', use_sync_bn=False
+      )
+  )
 
 
 @dataclasses.dataclass
@@ -136,16 +182,36 @@ class Losses(hyperparams.Config):
 
 
 @dataclasses.dataclass
-class YT8MTask(cfg.TaskConfig):
-  """The task config."""
-  model: DbofModel = DbofModel()
-  train_data: DataConfig = yt8m(is_training=True)
-  validation_data: DataConfig = yt8m(is_training=False)
-  losses: Losses = Losses()
-  gradient_clip_norm: float = 1.0
-  num_readers: int = 8
+class AveragePrecisionConfig(hyperparams.Config):
   top_k: int = 20
   top_n: Optional[int] = None
+  return_per_class_ap: bool = False
+
+
+@dataclasses.dataclass
+class Evaluation(hyperparams.Config):
+  average_precision: Optional[AveragePrecisionConfig] = None
+
+
+@dataclasses.dataclass
+class YT8MTask(cfg.TaskConfig):
+  """The task config."""
+  model: VideoClassificationModel = dataclasses.field(
+      default_factory=VideoClassificationModel
+  )
+  train_data: DataConfig = dataclasses.field(
+      default_factory=lambda: yt8m(is_training=True)
+  )
+  validation_data: DataConfig = dataclasses.field(
+      default_factory=lambda: yt8m(is_training=False)
+  )
+  losses: Losses = dataclasses.field(default_factory=Losses)
+  evaluation: Evaluation = dataclasses.field(
+      default_factory=lambda: Evaluation(  # pylint: disable=g-long-lambda
+          average_precision=AveragePrecisionConfig()
+      )
+  )
+  gradient_clip_norm: float = 1.0
 
 
 def add_trainer(
@@ -156,8 +222,8 @@ def add_trainer(
     train_epochs: int = 50,
     num_train_examples: int = YT8M_TRAIN_EXAMPLES,
     num_val_examples: int = YT8M_VAL_EXAMPLES,
-):
-  """Add and config a trainer to the experiment config."""
+) -> cfg.ExperimentConfig:
+  """Adds and config a trainer to the experiment config."""
   if num_train_examples <= 0:
     raise ValueError('Wrong train dataset size {!r}'.format(
         experiment.task.train_data))

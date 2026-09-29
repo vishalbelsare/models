@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,8 +15,9 @@
 """Contains custom quantization layer transforms."""
 from typing import Any, Type, Mapping, List, Union, Tuple
 
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 import tensorflow_model_optimization as tfmot
+from official.modeling import tf_utils
 from official.projects.qat.vision.modeling.layers import nn_blocks as quantized_nn_blocks
 from official.projects.qat.vision.modeling.layers import nn_layers as quantized_nn_layers
 from official.projects.qat.vision.quantization import configs
@@ -27,8 +28,13 @@ LayerNode = tfmot.quantization.keras.graph_transformations.transforms.LayerNode
 LayerPattern = tfmot.quantization.keras.graph_transformations.transforms.LayerPattern
 
 _LAYER_NAMES = [
-    'Vision>Conv2DBNBlock', 'Vision>InvertedBottleneckBlock',
-    'Vision>SegmentationHead', 'Vision>SpatialPyramidPooling', 'Vision>ASPP'
+    'Vision>Conv2DBNBlock',
+    'Vision>InvertedBottleneckBlock',
+    'Vision>MaybeDwInvertedBottleneckBlock',
+    'Vision>UniversalInvertedBottleneckBlock',
+    'Vision>SegmentationHead',
+    'Vision>SpatialPyramidPooling',
+    'Vision>ASPP',
 ]
 
 
@@ -58,7 +64,7 @@ class CustomLayerQuantize(
     return layer_metadata
 
   def _create_dummy_input_shape(
-      self, quantized_layer: tf.keras.layers.Layer
+      self, quantized_layer: tf_keras.layers.Layer
   ) -> Union[List[int], Tuple[Any, Any]]:
     dummy_input_shape = [1, 128, 128, 1]
     # SegmentationHead layer requires a tuple of 2 tensors.
@@ -89,7 +95,9 @@ class CustomLayerQuantize(
     if match_idx != len(bottleneck_names_and_weights):
       raise ValueError('{}/{} of Bottleneck weights is transformed.'.format(
           match_idx, len(bottleneck_names_and_weights)))
-    quantized_layer_config = keras.layers.serialize(quantized_layer)
+    quantized_layer_config = tf_utils.serialize_layer(
+        quantized_layer, use_legacy_format=True
+    )
     quantized_layer_config['name'] = quantized_layer_config['config']['name']
 
     layer_metadata = self._create_layer_metadata(bottleneck_layer['class_name'])
@@ -101,15 +109,30 @@ class CustomLayerQuantize(
 
 
 CUSTOM_TRANSFORMS = [
-    CustomLayerQuantize('Vision>BottleneckBlock',
-                        quantized_nn_blocks.BottleneckBlockQuantized),
-    CustomLayerQuantize('Vision>InvertedBottleneckBlock',
-                        quantized_nn_blocks.InvertedBottleneckBlockQuantized),
-    CustomLayerQuantize('Vision>Conv2DBNBlock',
-                        quantized_nn_blocks.Conv2DBNBlockQuantized),
-    CustomLayerQuantize('Vision>SegmentationHead',
-                        quantized_nn_layers.SegmentationHeadQuantized),
-    CustomLayerQuantize('Vision>SpatialPyramidPooling',
-                        quantized_nn_layers.SpatialPyramidPoolingQuantized),
-    CustomLayerQuantize('Vision>ASPP', quantized_nn_layers.ASPPQuantized)
+    CustomLayerQuantize(
+        'Vision>BottleneckBlock', quantized_nn_blocks.BottleneckBlockQuantized
+    ),
+    CustomLayerQuantize(
+        'Vision>InvertedBottleneckBlock',
+        quantized_nn_blocks.InvertedBottleneckBlockQuantized,
+    ),
+    CustomLayerQuantize(
+        'Vision>MaybeDwInvertedBottleneckBlock',
+        quantized_nn_blocks.MaybeDwInvertedBottleneckBlockQuantized,
+    ),
+    CustomLayerQuantize(
+        'Vision>UniversalInvertedBottleneckBlock',
+        quantized_nn_blocks.UniversalInvertedBottleneckBlockQuantized,
+    ),
+    CustomLayerQuantize(
+        'Vision>Conv2DBNBlock', quantized_nn_blocks.Conv2DBNBlockQuantized
+    ),
+    CustomLayerQuantize(
+        'Vision>SegmentationHead', quantized_nn_layers.SegmentationHeadQuantized
+    ),
+    CustomLayerQuantize(
+        'Vision>SpatialPyramidPooling',
+        quantized_nn_layers.SpatialPyramidPoolingQuantized,
+    ),
+    CustomLayerQuantize('Vision>ASPP', quantized_nn_layers.ASPPQuantized),
 ]

@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,13 +15,12 @@
 """TFM common training driver library."""
 # pytype: disable=attribute-error
 import os
-from typing import Any, Mapping, Optional, Tuple, List
-
-# Import libraries
+import tempfile
+from typing import Any, List, Mapping, Optional, Tuple
 
 from absl import logging
 import orbit
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 from official.core import actions
 from official.core import base_task
@@ -42,11 +41,13 @@ class OrbitExperimentRunner:
   For example, an experiment runner with customized checkpoint manager:
 
   ```python
-  class MyExpRunnerWithExporter(AbstractExperimentRunner):
+  class MyExpRunnerWithExporter(OrbitExperimentRunner):
     def _maybe_build_checkpoint_manager(sefl):
+      # Replaces the default CheckpointManger with a customized one.
       return MyCheckpointManager(*args)
 
-  # In user code
+  # In user code, instead of the orginal
+  # `OrbitExperimentRunner(..).run(mode)`, now user can do:
   MyExpRunnerWithExporter(**needed_kwargs).run(mode)
   ```
 
@@ -65,7 +66,10 @@ class OrbitExperimentRunner:
       train_actions: Optional[List[orbit.Action]] = None,
       eval_actions: Optional[List[orbit.Action]] = None,
       trainer: Optional[base_trainer.Trainer] = None,
-      controller_cls=orbit.Controller
+      controller_cls=orbit.Controller,
+      summary_manager: Optional[orbit.utils.SummaryManager] = None,
+      eval_summary_manager: Optional[orbit.utils.SummaryManager] = None,
+      enable_async_checkpointing: bool = False,
   ):
     """Constructor.
 
@@ -85,6 +89,12 @@ class OrbitExperimentRunner:
         the strategy.scope().
       controller_cls: The controller class to manage the train and eval process.
         Must be a orbit.Controller subclass.
+      summary_manager: Instance of the summary manager to override default
+        summary manager.
+      eval_summary_manager: Instance of the eval summary manager to override
+        default eval summary manager.
+      enable_async_checkpointing: Optional boolean indicating whether to enable
+        async checkpoint saving.
     """
     self.strategy = distribution_strategy or tf.distribute.get_strategy()
     self._params = params
@@ -98,32 +108,40 @@ class OrbitExperimentRunner:
         evaluate=('eval' in mode) or run_post_eval)
     assert self.trainer is not None
     self._checkpoint_manager = self._maybe_build_checkpoint_manager()
+    self._summary_manager = summary_manager
+    self._eval_summary_manager = eval_summary_manager
     self._controller = self._build_controller(
         trainer=self.trainer if 'train' in mode else None,
         evaluator=self.trainer,
         save_summary=save_summary,
         train_actions=train_actions,
         eval_actions=eval_actions,
-        controller_cls=controller_cls)
+        controller_cls=controller_cls,
+        enable_async_checkpointing=enable_async_checkpointing)
 
   @property
   def params(self) -> config_definitions.ExperimentConfig:
+    """The whole experiment parameters object."""
     return self._params
 
   @property
   def model_dir(self) -> str:
+    """Path to the model folder, which stores checkpoints, params, log, etc."""
     return self._model_dir
 
   @property
   def trainer(self) -> base_trainer.Trainer:
+    """The underlying Orbit Trainer object."""
     return self._trainer
 
   @property
-  def checkpoint_manager(self) -> tf.train.CheckpointManager:
+  def checkpoint_manager(self) -> Optional[tf.train.CheckpointManager]:
+    """The CheckpointManager that stores the checkpoints in a train job."""
     return self._checkpoint_manager
 
   @property
   def controller(self) -> orbit.Controller:
+    """The Orbit controller object."""
     return self._controller
 
   def _build_trainer(self, task: base_task.Task, train: bool,
@@ -148,10 +166,23 @@ class OrbitExperimentRunner:
     if self.trainer.checkpoint:
       if self.model_dir is None:
         raise ValueError('model_dir must be specified, but got None')
+
+      if (not self.strategy) or self.strategy.extended.should_checkpoint:
+        ckpt_path = self.model_dir
+        max_to_keep = self.params.trainer.max_to_keep
+      else:
+        # In multi worker training we need every worker to save checkpoint,
+        # because variables can trigger synchronization on read and
+        # synchronization needs all workers to participate. To avoid workers
+        # overriding each other we save to a temporary directory on non-chief
+        # workers.
+        ckpt_path = tempfile.mkdtemp()
+        max_to_keep = 1
+
       checkpoint_manager = tf.train.CheckpointManager(
           self.trainer.checkpoint,
-          directory=self.model_dir,
-          max_to_keep=self.params.trainer.max_to_keep,
+          directory=ckpt_path,
+          max_to_keep=max_to_keep,
           step_counter=self.trainer.global_step,
           checkpoint_interval=self.params.trainer.checkpoint_interval,
           init_fn=self.trainer.initialize)
@@ -159,26 +190,39 @@ class OrbitExperimentRunner:
       checkpoint_manager = None
     return checkpoint_manager
 
-  def _build_controller(self,
-                        trainer,
-                        evaluator,
-                        save_summary: bool = True,
-                        train_actions: Optional[List[orbit.Action]] = None,
-                        eval_actions: Optional[List[orbit.Action]] = None,
-                        controller_cls=orbit.Controller) -> orbit.Controller:
+  def _build_controller(
+      self,
+      trainer,
+      evaluator,
+      save_summary: bool = True,
+      train_actions: Optional[List[orbit.Action]] = None,
+      eval_actions: Optional[List[orbit.Action]] = None,
+      controller_cls=orbit.Controller,
+      enable_async_checkpointing: bool = False,
+  ) -> orbit.Controller:
     """Builds a Orbit controler."""
     train_actions = [] if not train_actions else train_actions
     if trainer:
+      checkpoint_manager = self.checkpoint_manager
+      assert checkpoint_manager, 'Checkpoint manager required but undefined.'
       train_actions += actions.get_train_actions(
           self.params,
           trainer,
           self.model_dir,
-          checkpoint_manager=self.checkpoint_manager)
+          checkpoint_manager=checkpoint_manager,
+      )
 
     eval_actions = [] if not eval_actions else eval_actions
     if evaluator:
       eval_actions += actions.get_eval_actions(self.params, evaluator,
                                                self.model_dir)
+
+    if save_summary:
+      eval_summary_dir = os.path.join(
+          self.model_dir, self.params.trainer.validation_summary_subdir
+      )
+    else:
+      eval_summary_dir = None
 
     controller = controller_cls(
         strategy=self.strategy,
@@ -187,23 +231,31 @@ class OrbitExperimentRunner:
         global_step=self.trainer.global_step,
         steps_per_loop=self.params.trainer.steps_per_loop,
         checkpoint_manager=self.checkpoint_manager,
-        summary_dir=os.path.join(self.model_dir, 'train') if
-        (save_summary) else None,
-        eval_summary_dir=os.path.join(
-            self.model_dir, self.params.trainer.validation_summary_subdir) if
-        (save_summary) else None,
-        summary_interval=self.params.trainer.summary_interval if
-        (save_summary) else None,
+        enable_async_checkpointing=enable_async_checkpointing,
+        summary_dir=os.path.join(self.model_dir, 'train')
+        if (save_summary)
+        else None,
+        eval_summary_dir=eval_summary_dir,
+        summary_interval=self.params.trainer.summary_interval
+        if (save_summary)
+        else None,
         train_actions=train_actions,
-        eval_actions=eval_actions)
+        eval_actions=eval_actions,
+        summary_manager=self._summary_manager
+        if hasattr(self, '_summary_manager')
+        else None,
+        eval_summary_manager=self._eval_summary_manager
+        if hasattr(self, '_eval_summary_manager')
+        else None,
+    )
     return controller
 
-  def run(self) -> Tuple[tf.keras.Model, Mapping[str, Any]]:
+  def run(self) -> Tuple[tf_keras.Model, Mapping[str, Any]]:
     """Run experiments by mode.
 
     Returns:
       A 2-tuple of (model, eval_logs).
-        model: `tf.keras.Model` instance.
+        model: `tf_keras.Model` instance.
         eval_logs: returns eval metrics logs when run_post_eval is set to True,
           otherwise, returns {}.
     """
@@ -246,7 +298,7 @@ class OrbitExperimentRunner:
 
     if self._run_post_eval or mode == 'train_and_post_eval':
       with self.strategy.scope():
-        return self.trainer.model, self.controller.evaluate(
+        return self.trainer.model, self.controller.evaluate(  # pytype: disable=bad-return-type  # always-use-property-annotation
             steps=params.trainer.validation_steps)
     else:
       return self.trainer.model, {}
@@ -263,8 +315,11 @@ def run_experiment(
     train_actions: Optional[List[orbit.Action]] = None,
     eval_actions: Optional[List[orbit.Action]] = None,
     trainer: Optional[base_trainer.Trainer] = None,
-    controller_cls=orbit.Controller
-) -> Tuple[tf.keras.Model, Mapping[str, Any]]:
+    controller_cls=orbit.Controller,
+    summary_manager: Optional[orbit.utils.SummaryManager] = None,
+    eval_summary_manager: Optional[orbit.utils.SummaryManager] = None,
+    enable_async_checkpointing: bool = False,
+) -> Tuple[tf_keras.Model, Mapping[str, Any]]:
   """Runs train/eval configured by the experiment params.
 
   Args:
@@ -283,10 +338,16 @@ def run_experiment(
       strategy.scope().
     controller_cls: The controller class to manage the train and eval process.
       Must be a orbit.Controller subclass.
+    summary_manager: Instance of the summary manager to override default summary
+      manager.
+    eval_summary_manager: Instance of the eval summary manager to override
+      default eval summary manager.
+    enable_async_checkpointing: Optional boolean indicating whether to enable
+        async checkpoint saving.
 
   Returns:
     A 2-tuple of (model, eval_logs).
-      model: `tf.keras.Model` instance.
+      model: `tf_keras.Model` instance.
       eval_logs: returns eval metrics logs when run_post_eval is set to True,
         otherwise, returns {}.
   """
@@ -302,5 +363,8 @@ def run_experiment(
       eval_actions=eval_actions,
       trainer=trainer,
       controller_cls=controller_cls,
+      summary_manager=summary_manager,
+      eval_summary_manager=eval_summary_manager,
+      enable_async_checkpointing=enable_async_checkpointing,
   )
   return runner.run()

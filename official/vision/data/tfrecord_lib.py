@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ import itertools
 from absl import logging
 import numpy as np
 from PIL import Image
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 import multiprocessing as mp
 
@@ -171,7 +171,7 @@ def write_tf_record_dataset(output_path, annotation_iterator,
     writers[idx % num_shards].write(tf_example.SerializeToString())
 
   if multiple_processes is None or multiple_processes > 0:
-    pool.close()
+    pool.close()  # pyrefly: ignore[unbound-name]
     pool.join()
 
   for writer in writers:

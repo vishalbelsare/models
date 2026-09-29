@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ import json
 import os
 
 from absl import logging
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 import tensorflow_datasets as tfds
 
 from official.nlp.tools import tokenization
@@ -599,7 +599,7 @@ class StsBProcessor(DefaultGLUEDataProcessor):
       text_a = self.process_text_fn(example["sentence1"])
       text_b = self.process_text_fn(example["sentence2"])
       if set_type != "test":
-        label = self.label_type(example["label"])
+        label = self.label_type(example["label"])  # pyrefly: ignore[not-callable]
       examples.append(
           InputExample(
               guid=guid, text_a=text_a, text_b=text_b, label=label,
@@ -668,7 +668,7 @@ class TfdsProcessor(DataProcessor):
       self._labels = list(range(info.features[self.label_key].num_classes))
 
   def _process_tfds_params_str(self, params_str):
-    """Extracts TFDS parameters from a comma-separated assignements string."""
+    """Extracts TFDS parameters from a comma-separated assignments string."""
     dtype_map = {"int": int, "float": float}
     cast_str_to_bool = lambda s: s.lower() not in ["false", "0"]
 
@@ -729,7 +729,7 @@ class TfdsProcessor(DataProcessor):
         text_a = self.process_text_fn(example[self.text_key])
         if self.text_b_key:
           text_b = self.process_text_fn(example[self.text_b_key])
-        label = self.label_type(example[self.label_key])
+        label = self.label_type(example[self.label_key])  # pyrefly: ignore[not-callable]
         if self.skip_label is not None and label == self.skip_label:
           continue
       if self.weight_key:
@@ -1599,7 +1599,7 @@ def generate_tf_record_from_data_file(processor,
 
   if is_regression:
     meta_data["task_type"] = "bert_regression"
-    meta_data["label_type"] = {int: "int", float: "float"}[label_type]
+    meta_data["label_type"] = {int: "int", float: "float"}[label_type]  # pyrefly: ignore[bad-index]
   else:
     meta_data["task_type"] = "bert_classification"
     meta_data["num_labels"] = len(processor.get_labels())
@@ -1607,6 +1607,6 @@ def generate_tf_record_from_data_file(processor,
     meta_data["has_sample_weights"] = True
 
   if eval_data_output_path:
-    meta_data["eval_data_size"] = len(eval_input_data_examples)
+    meta_data["eval_data_size"] = len(eval_input_data_examples)  # pyrefly: ignore[unbound-name]
 
   return meta_data

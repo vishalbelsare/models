@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ import math
 import string
 
 import numpy as np
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 from official.modeling.tf_utils import get_shape_list
 
@@ -104,8 +104,8 @@ def _get_output_shape(output_rank, known_last_dims):
   return [None] * (output_rank - len(known_last_dims)) + list(known_last_dims)
 
 
-@tf.keras.utils.register_keras_serializable(package="Text")
-class LongformerAttention(tf.keras.layers.MultiHeadAttention):
+@tf_keras.utils.register_keras_serializable(package="Text")
+class LongformerAttention(tf_keras.layers.MultiHeadAttention):
   """LongformerAttention.
 
     Args:
@@ -170,14 +170,14 @@ class LongformerAttention(tf.keras.layers.MultiHeadAttention):
     free_dims = self._query_shape.rank - 1
     einsum_equation, bias_axes, output_rank = _build_proj_equation(
         free_dims, bound_dims=1, output_dims=2)
-    self._query_dense = tf.keras.layers.EinsumDense(
+    self._query_dense = tf_keras.layers.EinsumDense(
         einsum_equation,
         output_shape=_get_output_shape(output_rank - 1,
                                        [self._num_heads, self._key_dim]),
         bias_axes=bias_axes if self._use_bias else None,
         name="query",
         **common_kwargs)
-    self._global_query_dense = tf.keras.layers.EinsumDense(
+    self._global_query_dense = tf_keras.layers.EinsumDense(
         einsum_equation,
         output_shape=_get_output_shape(output_rank - 1,
                                        [self._num_heads, self._key_dim]),
@@ -186,14 +186,14 @@ class LongformerAttention(tf.keras.layers.MultiHeadAttention):
         **common_kwargs)
     einsum_equation, bias_axes, output_rank = _build_proj_equation(
         self._key_shape.rank - 1, bound_dims=1, output_dims=2)
-    self._key_dense = tf.keras.layers.EinsumDense(
+    self._key_dense = tf_keras.layers.EinsumDense(
         einsum_equation,
         output_shape=_get_output_shape(output_rank - 1,
                                        [self._num_heads, self._key_dim]),
         bias_axes=bias_axes if self._use_bias else None,
         name="key",
         **common_kwargs)
-    self._global_key_dense = tf.keras.layers.EinsumDense(
+    self._global_key_dense = tf_keras.layers.EinsumDense(
         einsum_equation,
         output_shape=_get_output_shape(output_rank - 1,
                                        [self._num_heads, self._key_dim]),
@@ -202,14 +202,14 @@ class LongformerAttention(tf.keras.layers.MultiHeadAttention):
         **common_kwargs)
     einsum_equation, bias_axes, output_rank = _build_proj_equation(
         self._value_shape.rank - 1, bound_dims=1, output_dims=2)
-    self._value_dense = tf.keras.layers.EinsumDense(
+    self._value_dense = tf_keras.layers.EinsumDense(
         einsum_equation,
         output_shape=_get_output_shape(output_rank - 1,
                                        [self._num_heads, self._value_dim]),
         bias_axes=bias_axes if self._use_bias else None,
         name="value",
         **common_kwargs)
-    self._global_value_dense = tf.keras.layers.EinsumDense(
+    self._global_value_dense = tf_keras.layers.EinsumDense(
         einsum_equation,
         output_shape=_get_output_shape(output_rank - 1,
                                        [self._num_heads, self._value_dim]),
@@ -221,13 +221,13 @@ class LongformerAttention(tf.keras.layers.MultiHeadAttention):
     # These computations could be wrapped into the keras attention layer once
     # it support mult-head einsum computations.
     self._build_attention(output_rank)
-    self._global_dropout_layer = tf.keras.layers.Dropout(rate=self._dropout)
+    self._global_dropout_layer = tf_keras.layers.Dropout(rate=self._dropout)
     # self._output_dense = self._make_output_dense(
     #   free_dims, common_kwargs, "attention_output")
-    self._output_dense = tf.keras.layers.Dense(
+    self._output_dense = tf_keras.layers.Dense(
         units=self._num_heads * self._key_dim, name="dense", **common_kwargs)
 
-  def call(self,
+  def call(self,  # pyrefly: ignore[bad-override]
            hidden_states,
            attention_mask=None,
            is_index_masked=None,
@@ -332,13 +332,13 @@ class LongformerAttention(tf.keras.layers.MultiHeadAttention):
     # self.one_sided_attn_window_size * 2 + 1]
     if self.global_attention_size > 0:
       masked_index = tf.tile(
-          is_index_masked[:, :, None, None],
+          is_index_masked[:, :, None, None],  # pyrefly: ignore[unsupported-operation]
           (1, 1, self._num_heads, self._one_sided_attn_window_size * 2 +
            max_num_global_attn_indices + 1),
       )
     else:
       masked_index = tf.tile(
-          is_index_masked[:, :, None, None],
+          is_index_masked[:, :, None, None],  # pyrefly: ignore[unsupported-operation]
           (1, 1, self._num_heads, self._one_sided_attn_window_size * 2 + 1),
       )
 
@@ -412,13 +412,13 @@ class LongformerAttention(tf.keras.layers.MultiHeadAttention):
     # global attn
     if self.global_attention_size > 0:
       masked_global_attn_index = tf.tile(
-          is_index_global_attn[:, :, None, None],
+          is_index_global_attn[:, :, None, None],  # pyrefly: ignore[unsupported-operation]
           (1, 1, self._num_heads, self._one_sided_attn_window_size * 2 +
            max_num_global_attn_indices + 1),
       )
     else:
       masked_global_attn_index = tf.tile(
-          is_index_global_attn[:, :, None, None],
+          is_index_global_attn[:, :, None, None],  # pyrefly: ignore[unsupported-operation]
           (1, 1, self._num_heads, self._one_sided_attn_window_size * 2 + 1),
       )
 

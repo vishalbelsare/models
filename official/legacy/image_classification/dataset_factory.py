@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ import os
 from typing import Any, List, Mapping, Optional, Tuple, Union
 
 from absl import logging
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 import tensorflow_datasets as tfds
 from official.legacy.image_classification import augment
 from official.legacy.image_classification import preprocessing
@@ -48,7 +48,7 @@ class AugmentConfig(base_config.Config):
   def build(self) -> augment.ImageAugment:
     """Build the augmenter using this config."""
     params = self.params or {}
-    augmenter = AUGMENTERS.get(self.name, None)
+    augmenter = AUGMENTERS.get(self.name, None)  # pyrefly: ignore[no-matching-overload]
     return augmenter(**params) if augmenter is not None else None
 
 
@@ -116,7 +116,7 @@ class DatasetConfig(base_config.Config):
   num_devices: int = 1
   dtype: str = 'float32'
   one_hot: bool = True
-  augmenter: AugmentConfig = AugmentConfig()
+  augmenter: AugmentConfig = dataclasses.field(default_factory=AugmentConfig)
   download: bool = False
   shuffle_buffer_size: int = 10000
   file_shuffle_buffer_size: int = 1024

@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 """Utils for processing video dataset features."""
 
 from typing import Optional, Tuple
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 
 def _sample_or_pad_sequence_indices(sequence: tf.Tensor, num_steps: int,
@@ -191,19 +191,49 @@ def decode_jpeg(image_string: tf.Tensor, channels: int = 0) -> tf.Tensor:
   Returns:
     A Tensor of shape [T, H, W, C] of type uint8 with the decoded images.
   """
-  return tf.map_fn(
-      lambda x: tf.image.decode_jpeg(x, channels=channels),
-      image_string,
-      back_prop=False,
-      dtype=tf.uint8)
+  return tf.nest.map_structure(
+      tf.stop_gradient,
+      tf.map_fn(
+          lambda x: tf.image.decode_jpeg(x, channels=channels),
+          image_string,
+          dtype=tf.uint8,
+      ),
+  )
 
 
-def crop_image(frames: tf.Tensor,
-               target_height: int,
-               target_width: int,
-               random: bool = False,
-               num_crops: int = 1,
-               seed: Optional[int] = None) -> tf.Tensor:
+def decode_image(image_string: tf.Tensor, channels: int = 0) -> tf.Tensor:
+  """Decodes PNG or JPEG raw bytes string into a RGB uint8 Tensor.
+
+  Args:
+    image_string: A `tf.Tensor` of type strings with the raw PNG or JPEG bytes
+      where the first dimension is timesteps.
+    channels: Number of channels of the PNG image. Allowed values are 0, 1 and
+      3. If 0, the number of channels will be calculated at runtime and no
+      static shape is set.
+
+  Returns:
+    A Tensor of shape [T, H, W, C] of type uint8 with the decoded images.
+  """
+  return tf.nest.map_structure(
+      tf.stop_gradient,
+      tf.map_fn(
+          lambda x: tf.image.decode_image(  # pylint: disable=g-long-lambda
+              x, channels=channels, expand_animations=False
+          ),
+          image_string,
+          dtype=tf.uint8,
+      ),
+  )
+
+
+def crop_image(
+    frames: tf.Tensor,
+    target_height: int,
+    target_width: int,
+    random: bool = False,
+    num_crops: int = 1,
+    seed: Optional[int] = None,
+) -> tf.Tensor:
   """Crops the image sequence of images.
 
   If requested size is bigger than image size, image is padded with 0. If not
@@ -315,7 +345,8 @@ def resize_smallest(frames: tf.Tensor, min_resize: int) -> tf.Tensor:
 def random_crop_resize(frames: tf.Tensor, output_h: int, output_w: int,
                        num_frames: int, num_channels: int,
                        aspect_ratio: Tuple[float, float],
-                       area_range: Tuple[float, float]) -> tf.Tensor:
+                       area_range: Tuple[float, float],
+                       seed: int = 0) -> tf.Tensor:
   """First crops clip with jittering and then resizes to (output_h, output_w).
 
   Args:
@@ -326,6 +357,7 @@ def random_crop_resize(frames: tf.Tensor, output_h: int, output_w: int,
     num_channels: Number of channels of the clip.
     aspect_ratio: Float tuple with the aspect range for cropping.
     area_range: Float tuple with the area range for cropping.
+    seed: A seed to use for the random sampling.
 
   Returns:
     A Tensor of shape [timesteps, output_h, output_w, channels] of type
@@ -343,7 +375,8 @@ def random_crop_resize(frames: tf.Tensor, output_h: int, output_w: int,
       aspect_ratio_range=aspect_ratio,
       area_range=area_range,
       max_attempts=100,
-      use_image_if_no_bounding_boxes=True)
+      use_image_if_no_bounding_boxes=True,
+      seed=seed)
   bbox_begin, bbox_size, _ = sample_distorted_bbox
   offset_y, offset_x, _ = tf.unstack(bbox_begin)
   target_height, target_width, _ = tf.unstack(bbox_size)
@@ -380,9 +413,33 @@ def random_flip_left_right(frames: tf.Tensor,
   return frames
 
 
-def normalize_image(frames: tf.Tensor,
-                    zero_centering_image: bool,
-                    dtype: tf.dtypes.DType = tf.float32) -> tf.Tensor:
+def random_rotation(frames: tf.Tensor, seed: Optional[int] = None) -> tf.Tensor:
+  """Randomly rotate all frames with 0, 90, 180, or 270 degrees.
+
+  Args:
+    frames: A Tensor of shape [timesteps, input_h, input_w, channels].
+    seed: A seed to use for the random sampling.
+
+  Returns:
+    A Tensor of shape [timesteps, output_h, output_w, channels] eventually
+    rotated at 0/90/180/270 degrees.
+  """
+  rotation_times = tf.random.uniform(
+      (), minval=0, maxval=4, dtype=tf.int32, seed=seed
+  )
+  frames = tf.cond(
+      tf.greater(rotation_times, 0),
+      true_fn=lambda: tf.image.rot90(frames, k=rotation_times),
+      false_fn=lambda: frames,
+  )
+  return frames
+
+
+def normalize_image(
+    frames: tf.Tensor,
+    zero_centering_image: bool,
+    dtype: tf.dtypes.DType = tf.float32,
+) -> tf.Tensor:
   """Normalizes images.
 
   Args:

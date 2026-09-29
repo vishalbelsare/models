@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,14 +15,15 @@
 """Contains common building blocks for neural networks."""
 
 import enum
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union, Any
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 import tensorflow_model_optimization as tfmot
 from official.modeling import tf_utils
 from official.projects.qat.vision.quantization import configs
 from official.projects.qat.vision.quantization import helper
+from official.vision.modeling import heads
 from official.vision.modeling.decoders import aspp
 from official.vision.modeling.layers import nn_layers
 
@@ -40,10 +41,10 @@ class FeatureFusion(str, enum.Enum):
   DEEPLABV3PLUS_SUM_TO_MERGE = 'deeplabv3plus_sum_to_merge'
 
 
-@tf.keras.utils.register_keras_serializable(package='Vision')
+@tf_keras.utils.register_keras_serializable(package='Vision')
 class SqueezeExcitationQuantized(
     helper.LayerQuantizerHelper,
-    tf.keras.layers.Layer):
+    tf_keras.layers.Layer):
   """Creates a squeeze and excitation layer."""
 
   def __init__(self,
@@ -71,9 +72,9 @@ class SqueezeExcitationQuantized(
       use_3d_input: A `bool` of whether input is 2D or 3D image.
       kernel_initializer: A `str` of kernel_initializer for convolutional
         layers.
-      kernel_regularizer: A `tf.keras.regularizers.Regularizer` object for
+      kernel_regularizer: A `tf_keras.regularizers.Regularizer` object for
         Conv2D. Default to None.
-      bias_regularizer: A `tf.keras.regularizers.Regularizer` object for Conv2d.
+      bias_regularizer: A `tf_keras.regularizers.Regularizer` object for Conv2d.
         Default to None.
       activation: A `str` name of the activation function.
       gating_activation: A `str` name of the activation function for final
@@ -95,7 +96,7 @@ class SqueezeExcitationQuantized(
     self._kernel_initializer = kernel_initializer
     self._kernel_regularizer = kernel_regularizer
     self._bias_regularizer = bias_regularizer
-    if tf.keras.backend.image_data_format() == 'channels_last':
+    if tf_keras.backend.image_data_format() == 'channels_last':
       if not use_3d_input:
         self._spatial_axis = [1, 2]
       else:
@@ -117,10 +118,14 @@ class SqueezeExcitationQuantized(
           tf_utils.get_activation('relu6', use_keras_layer=True),
           configs.Default8BitActivationQuantizeConfig())
     else:
-      self._gating_activation_layer = tfmot.quantization.keras.QuantizeWrapperV2(
-          tf_utils.get_activation(
-              self._gating_activation, use_keras_layer=True),
-          configs.Default8BitActivationQuantizeConfig())
+      self._gating_activation_layer = (
+          tfmot.quantization.keras.QuantizeWrapperV2(
+              tf_utils.get_activation(
+                  self._gating_activation, use_keras_layer=True
+              ),
+              configs.Default8BitActivationQuantizeConfig(),
+          )
+      )
 
   def _apply_gating_activation_layer(
       self, x: tf.Tensor, training: bool) -> tf.Tensor:
@@ -161,7 +166,7 @@ class SqueezeExcitationQuantized(
         activation=helper.NoOpActivation())
 
     self._multiply = tfmot.quantization.keras.QuantizeWrapperV2(
-        tf.keras.layers.Multiply(),
+        tf_keras.layers.Multiply(),
         configs.Default8BitQuantizeConfig([], [], True))
     self._reduce_mean_quantizer = (
         tfmot.quantization.keras.quantizers.MovingAverageQuantizer(
@@ -199,13 +204,13 @@ class SqueezeExcitationQuantized(
     x = self._reduce_mean_quantizer(
         x, training, self._reduce_mean_quantizer_vars)
     x = self._activation_layer(self._se_reduce(x))
-    x = self._apply_gating_activation_layer(self._se_expand(x), training)
+    x = self._apply_gating_activation_layer(self._se_expand(x), training)  # pyrefly: ignore[bad-argument-type]
     x = self._multiply([x, inputs])
     return x
 
 
-@tf.keras.utils.register_keras_serializable(package='Vision')
-class SegmentationHeadQuantized(tf.keras.layers.Layer):
+@tf_keras.utils.register_keras_serializable(package='Vision')
+class SegmentationHeadQuantized(tf_keras.layers.Layer):
   """Creates a segmentation head."""
 
   def __init__(
@@ -224,11 +229,12 @@ class SegmentationHeadQuantized(tf.keras.layers.Layer):
       low_level_num_filters: int = 48,
       num_decoder_filters: int = 256,
       activation: str = 'relu',
+      logit_activation: Optional[str] = None,
       use_sync_bn: bool = False,
       norm_momentum: float = 0.99,
       norm_epsilon: float = 0.001,
-      kernel_regularizer: Optional[tf.keras.regularizers.Regularizer] = None,
-      bias_regularizer: Optional[tf.keras.regularizers.Regularizer] = None,
+      kernel_regularizer: Optional[tf_keras.regularizers.Regularizer] = None,
+      bias_regularizer: Optional[tf_keras.regularizers.Regularizer] = None,
       **kwargs):
     """Initializes a segmentation head.
 
@@ -266,13 +272,14 @@ class SegmentationHeadQuantized(tf.keras.layers.Layer):
         It is only used when feature_fusion is set to `panoptic_fpn_fusion`.
       activation: A `str` that indicates which activation is used, e.g. 'relu',
         'swish', etc.
+      logit_activation: Unused.
       use_sync_bn: A `bool` that indicates whether to use synchronized batch
         normalization across different replicas.
       norm_momentum: A `float` of normalization momentum for the moving average.
       norm_epsilon: A `float` added to variance to avoid dividing by zero.
-      kernel_regularizer: A `tf.keras.regularizers.Regularizer` object for
+      kernel_regularizer: A `tf_keras.regularizers.Regularizer` object for
         Conv2D. Default is None.
-      bias_regularizer: A `tf.keras.regularizers.Regularizer` object for Conv2D.
+      bias_regularizer: A `tf_keras.regularizers.Regularizer` object for Conv2D.
       **kwargs: Additional keyword arguments to be passed.
     """
     super().__init__(**kwargs)
@@ -298,13 +305,16 @@ class SegmentationHeadQuantized(tf.keras.layers.Layer):
         'kernel_regularizer': kernel_regularizer,
         'bias_regularizer': bias_regularizer,
     }
-    if tf.keras.backend.image_data_format() == 'channels_last':
+    if tf_keras.backend.image_data_format() == 'channels_last':
       self._bn_axis = -1
     else:
       self._bn_axis = 1
     self._activation_layer = tfmot.quantization.keras.QuantizeWrapperV2(
         tf_utils.get_activation(activation, use_keras_layer=True),
         configs.Default8BitActivationQuantizeConfig())
+    if logit_activation:
+      raise ValueError('Unused logit_activation option inherited from '
+                       'vision SegmentationHead modeling config.')
 
   def build(self, input_shape: Sequence[tf.TensorShape]):
     """Creates the variables of the segmentation head."""
@@ -313,7 +323,7 @@ class SegmentationHeadQuantized(tf.keras.layers.Layer):
     # fusion type is `deeplabv3plus`.
     backbone_shape = input_shape[0]
     use_depthwise_convolution = self._config_dict['use_depthwise_convolution']
-    random_initializer = tf.keras.initializers.RandomNormal(stddev=0.01)
+    random_initializer = tf_keras.initializers.RandomNormal(stddev=0.01)
     conv_kwargs = {
         'kernel_size': 3 if not use_depthwise_convolution else 1,
         'padding': 'same',
@@ -323,9 +333,9 @@ class SegmentationHeadQuantized(tf.keras.layers.Layer):
     }
 
     norm_layer = (
-        tf.keras.layers.experimental.SyncBatchNormalization
+        tf_keras.layers.experimental.SyncBatchNormalization
         if self._config_dict['use_sync_bn'] else
-        tf.keras.layers.BatchNormalization)
+        tf_keras.layers.BatchNormalization)
     norm_with_quantize = helper.BatchNormalizationQuantized(norm_layer)
     norm_no_quantize = helper.BatchNormalizationNoQuantized(norm_layer)
     norm = helper.norm_by_activation(self._config_dict['activation'],
@@ -402,7 +412,7 @@ class SegmentationHeadQuantized(tf.keras.layers.Layer):
 
     self._concat_layer = helper.ConcatenateQuantized(axis=self._bn_axis)
     self._add_layer = tfmot.quantization.keras.QuantizeWrapperV2(
-        tf.keras.layers.Add(), configs.Default8BitQuantizeConfig([], [], True))
+        tf_keras.layers.Add(), configs.Default8BitQuantizeConfig([], [], True))
 
     super().build(input_shape)
 
@@ -473,7 +483,7 @@ class SegmentationHeadQuantized(tf.keras.layers.Layer):
     return cls(**config)
 
 
-@tf.keras.utils.register_keras_serializable(package='Vision')
+@tf_keras.utils.register_keras_serializable(package='Vision')
 class SpatialPyramidPoolingQuantized(nn_layers.SpatialPyramidPooling):
   """Implements the quantized Atrous Spatial Pyramid Pooling.
 
@@ -495,7 +505,7 @@ class SpatialPyramidPoolingQuantized(nn_layers.SpatialPyramidPooling):
       activation: str = 'relu',
       dropout: float = 0.5,
       kernel_initializer: str = 'GlorotUniform',
-      kernel_regularizer: Optional[tf.keras.regularizers.Regularizer] = None,
+      kernel_regularizer: Optional[tf_keras.regularizers.Regularizer] = None,
       interpolation: str = 'bilinear',
       use_depthwise_convolution: bool = False,
       **kwargs):
@@ -551,8 +561,8 @@ class SpatialPyramidPoolingQuantized(nn_layers.SpatialPyramidPooling):
     channels = input_shape[3]
 
     norm_layer = (
-        tf.keras.layers.experimental.SyncBatchNormalization
-        if self._use_sync_bn else tf.keras.layers.BatchNormalization)
+        tf_keras.layers.experimental.SyncBatchNormalization
+        if self._use_sync_bn else tf_keras.layers.BatchNormalization)
     norm_with_quantize = helper.BatchNormalizationQuantized(norm_layer)
     norm_no_quantize = helper.BatchNormalizationNoQuantized(norm_layer)
     norm = helper.norm_by_activation(self._activation, norm_with_quantize,
@@ -649,14 +659,14 @@ class SpatialPyramidPoolingQuantized(nn_layers.SpatialPyramidPooling):
             momentum=self._batchnorm_momentum,
             epsilon=self._batchnorm_epsilon)
     ]
-    self._dropout_layer = tf.keras.layers.Dropout(rate=self._dropout)
+    self._dropout_layer = tf_keras.layers.Dropout(rate=self._dropout)
     self._concat_layer = helper.ConcatenateQuantized(axis=-1)
 
   def call(self,
            inputs: tf.Tensor,
            training: Optional[bool] = None) -> tf.Tensor:
     if training is None:
-      training = tf.keras.backend.learning_phase()
+      training = tf_keras.backend.learning_phase()
     result = []
     for i, layers in enumerate(self.aspp_layers):
       x = inputs
@@ -677,7 +687,7 @@ class SpatialPyramidPoolingQuantized(nn_layers.SpatialPyramidPooling):
     return self._dropout_layer(x)
 
 
-@tf.keras.utils.register_keras_serializable(package='Vision')
+@tf_keras.utils.register_keras_serializable(package='Vision')
 class ASPPQuantized(aspp.ASPP):
   """Creates a quantized Atrous Spatial Pyramid Pooling (ASPP) layer."""
 
@@ -693,7 +703,7 @@ class ASPPQuantized(aspp.ASPP):
       activation: str = 'relu',
       dropout_rate: float = 0.0,
       kernel_initializer: str = 'VarianceScaling',
-      kernel_regularizer: Optional[tf.keras.regularizers.Regularizer] = None,
+      kernel_regularizer: Optional[tf_keras.regularizers.Regularizer] = None,
       interpolation: str = 'bilinear',
       use_depthwise_convolution: bool = False,
       spp_layer_version: str = 'v1',
@@ -715,7 +725,7 @@ class ASPPQuantized(aspp.ASPP):
       dropout_rate: A `float` rate for dropout regularization.
       kernel_initializer: A `str` name of kernel_initializer for convolutional
         layers.
-      kernel_regularizer: A `tf.keras.regularizers.Regularizer` object for
+      kernel_regularizer: A `tf_keras.regularizers.Regularizer` object for
         Conv2D. Default is None.
       interpolation: A `str` of interpolation method. It should be one of
         `bilinear`, `nearest`, `bicubic`, `area`, `lanczos3`, `lanczos5`,
@@ -774,7 +784,7 @@ class ASPPQuantized(aspp.ASPP):
     return self.aspp(backbone_output)
 
 
-class BatchNormalizationWrapper(tf.keras.layers.Wrapper):
+class BatchNormalizationWrapper(tf_keras.layers.Wrapper):
   """A BatchNormalizationWrapper that explicitly not folded.
 
   It just added an identity depthwise conv right before the normalization.
@@ -792,3 +802,153 @@ class BatchNormalizationWrapper(tf.keras.layers.Wrapper):
         inputs, tf.ones([1, 1, channels, 1]), [1, 1, 1, 1], 'VALID')
     outputs = self.layer.call(x, *args, **kwargs)
     return outputs
+
+
+class MaskScoringQuantized(heads.MaskScoring):
+  """Creates a quantized mask scoring layer.
+
+  This implements mask scoring layer from the paper:
+
+  Zhaojin Huang, Lichao Huang, Yongchao Gong, Chang Huang, Xinggang Wang.
+  Mask Scoring R-CNN.
+  (https://arxiv.org/pdf/1903.00241.pdf)
+  """
+
+  def build(self, input_shape: Union[tf.TensorShape, List[tf.TensorShape]]):
+    """Creates the variables of the mask scoring head."""
+    self._activation_layer = tfmot.quantization.keras.QuantizeWrapperV2(
+        tf_utils.get_activation(
+            self._config_dict['activation'], use_keras_layer=True
+        ),
+        configs.Default8BitActivationQuantizeConfig(),
+    )
+    conv_kwargs = {
+        'filters': self._config_dict['num_filters'],
+        'kernel_size': 3,
+        'padding': 'same',
+    }
+    conv_kwargs.update({
+        'kernel_initializer': tf_keras.initializers.VarianceScaling(
+            scale=2, mode='fan_out', distribution='untruncated_normal'
+        ),
+        'bias_initializer': tf.zeros_initializer(),
+        'kernel_regularizer': self._config_dict['kernel_regularizer'],
+        'bias_regularizer': self._config_dict['bias_regularizer'],
+    })
+    norm_layer = (
+        tf_keras.layers.experimental.SyncBatchNormalization
+        if self._config_dict['use_sync_bn']
+        else tf_keras.layers.BatchNormalization
+    )
+    norm_with_quantize = helper.BatchNormalizationQuantized(norm_layer)
+    norm_no_quantize = helper.BatchNormalizationNoQuantized(norm_layer)
+    bn_op = helper.norm_by_activation(
+        self._config_dict['activation'], norm_with_quantize, norm_no_quantize
+    )
+    bn_kwargs = {
+        'axis': self._bn_axis,
+        'momentum': self._config_dict['norm_momentum'],
+        'epsilon': self._config_dict['norm_epsilon'],
+    }
+
+    self._convs = []
+    self._conv_norms = []
+    for i in range(self._config_dict['num_convs']):
+      if self._config_dict['use_depthwise_convolution']:
+        self._convs.append(
+            helper.DepthwiseConv2DQuantized(
+                name='mask-scoring-depthwise-conv-{}'.format(i),
+                kernel_size=3,
+                padding='same',
+                use_bias=False,
+                depthwise_initializer=tf_keras.initializers.RandomNormal(
+                    stddev=0.01),
+                depthwise_regularizer=self._config_dict['kernel_regularizer'],
+                depth_multiplier=1,
+                activation=helper.NoOpActivation()))
+        norm_name = 'mask-scoring-depthwise-bn-{}'.format(i)
+        self._conv_norms.append(bn_op(name=norm_name, **bn_kwargs))
+      conv_name = 'mask-scoring_{}'.format(i)
+      if 'kernel_initializer' in conv_kwargs:
+        conv_kwargs['kernel_initializer'] = tf_utils.clone_initializer(
+            conv_kwargs['kernel_initializer']
+        )
+      if self._config_dict['use_depthwise_convolution']:
+        conv_kwargs['kernel_size'] = 1
+      self._convs.append(
+          helper.Conv2DQuantized(
+              name=conv_name, activation=helper.NoOpActivation(), **conv_kwargs
+          )
+      )
+      bn_name = 'mask-scoring-bn_{}'.format(i)
+      self._conv_norms.append(bn_op(name=bn_name, **bn_kwargs))
+
+    self._fcs = []
+    self._fc_norms = []
+    for i in range(self._config_dict['num_fcs']):
+      fc_name = 'mask-scoring-fc_{}'.format(i)
+      self._fcs.append(
+          helper.DenseQuantized(
+              units=self._config_dict['fc_dims'],
+              kernel_initializer=tf_keras.initializers.VarianceScaling(
+                  scale=1 / 3.0, mode='fan_out', distribution='uniform'
+              ),
+              kernel_regularizer=self._config_dict['kernel_regularizer'],
+              bias_regularizer=self._config_dict['bias_regularizer'],
+              name=fc_name,
+              activation=helper.NoOpActivation(),
+          )
+      )
+      bn_name = 'mask-scoring-fc-bn_{}'.format(i)
+      self._fc_norms.append(bn_op(name=bn_name, **bn_kwargs))
+
+    self._classifier = helper.DenseOutputQuantized(
+        units=self._config_dict['num_classes'],
+        kernel_initializer=tf_keras.initializers.RandomNormal(stddev=0.01),
+        bias_initializer=tf.zeros_initializer(),
+        kernel_regularizer=self._config_dict['kernel_regularizer'],
+        bias_regularizer=self._config_dict['bias_regularizer'],
+        name='iou-scores',
+    )
+
+    self._resizing_layer = helper.ResizingQuantized(
+        self._config_dict['fc_input_size'][0],
+        self._config_dict['fc_input_size'][1],
+        interpolation='bilinear',
+    )
+
+    self._identity_layer = helper.IdentityQuantized(trainable=False)
+
+    super().build(input_shape)
+
+  def call(self, inputs: tf.Tensor, training: bool = None):  # pytype: disable=annotation-type-mismatch
+    """Forward pass mask scoring head.
+
+    Args:
+      inputs: A `tf.Tensor` of the shape [batch_size, width, size, num_classes],
+        representing the segmentation logits.
+      training: a `bool` indicating whether it is in `training` mode.
+
+    Returns:
+      mask_scores: A `tf.Tensor` of predicted mask scores
+        [batch_size, num_classes].
+    """
+    x = tf.stop_gradient(inputs)
+    for conv, bn in zip(self._convs, self._conv_norms):
+      x = conv(x)
+      x = bn(x)
+      x = self._activation_layer(x)
+
+    x = self._resizing_layer(x)
+
+    _, h, w, filters = x.get_shape().as_list()
+    x = tf.reshape(x, [-1, h * w * filters])
+
+    for fc, bn in zip(self._fcs, self._fc_norms):
+      x = fc(x)
+      x = bn(x)
+      x = self._activation_layer(x)
+
+    ious = self._classifier(x)
+    ious = self._identity_layer(ious)
+    return ious

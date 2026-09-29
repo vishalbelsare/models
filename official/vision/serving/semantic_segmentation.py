@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,23 +14,20 @@
 
 """Semantic segmentation input and model functions for serving/inference."""
 
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 from official.vision.modeling import factory
 from official.vision.ops import preprocess_ops
 from official.vision.serving import export_base
 
 
-MEAN_RGB = (0.485 * 255, 0.456 * 255, 0.406 * 255)
-STDDEV_RGB = (0.229 * 255, 0.224 * 255, 0.225 * 255)
-
-
 class SegmentationModule(export_base.ExportModule):
   """Segmentation Module."""
 
   def _build_model(self):
-    input_specs = tf.keras.layers.InputSpec(
-        shape=[self._batch_size] + self._input_image_size + [3])
+    input_specs = tf_keras.layers.InputSpec(
+        shape=[self._batch_size] + self._input_image_size + [self._num_channels]
+    )
 
     return factory.build_segmentation_model(
         input_specs=input_specs,
@@ -39,11 +36,16 @@ class SegmentationModule(export_base.ExportModule):
 
   def _build_inputs(self, image):
     """Builds classification model inputs for serving."""
+    if isinstance(image, tf.RaggedTensor):
+      image = image.to_tensor()
+    image = tf.cast(image, dtype=tf.float32)
 
     # Normalizes image with mean and std pixel values.
-    image = preprocess_ops.normalize_image(image,
-                                           offset=MEAN_RGB,
-                                           scale=STDDEV_RGB)
+    image_feature = self.params.task.train_data.image_feature
+    image = preprocess_ops.normalize_image(
+        image,
+        offset=image_feature.mean,
+        scale=image_feature.stddev)
 
     if self.params.task.train_data.preserve_aspect_ratio:
       image, image_info = preprocess_ops.resize_and_crop_image(
@@ -70,9 +72,10 @@ class SegmentationModule(export_base.ExportModule):
     image_info = None
     if self._input_type != 'tflite':
       with tf.device('cpu:0'):
-        images = tf.cast(images, dtype=tf.float32)
         images_spec = tf.TensorSpec(
-            shape=self._input_image_size + [3], dtype=tf.float32)
+            shape=self._input_image_size + [self._num_channels],
+            dtype=tf.float32,
+        )
         image_info_spec = tf.TensorSpec(shape=[4, 2], dtype=tf.float32)
 
         images, image_info = tf.nest.map_structure(
@@ -91,11 +94,11 @@ class SegmentationModule(export_base.ExportModule):
       if logits.shape[0] != 1:
         raise ValueError('Batch size cannot be more than 1.')
 
-      image_shape = tf.cast(image_info[0, 0, :], tf.int32)
+      image_shape = tf.cast(image_info[0, 0, :], tf.int32)  # pyrefly: ignore[unsupported-operation]
       if self.params.task.train_data.preserve_aspect_ratio:
         rescale_size = tf.cast(
-            tf.math.ceil(image_info[0, 1, :] / image_info[0, 2, :]), tf.int32)
-        offsets = tf.cast(image_info[0, 3, :], tf.int32)
+            tf.math.ceil(image_info[0, 1, :] / image_info[0, 2, :]), tf.int32)  # pyrefly: ignore[unsupported-operation]
+        offsets = tf.cast(image_info[0, 3, :], tf.int32)  # pyrefly: ignore[unsupported-operation]
         logits = tf.image.resize(logits, rescale_size, method='bilinear')
         outputs['logits'] = tf.image.crop_to_bounding_box(
             logits, offsets[0], offsets[1], image_shape[0], image_shape[1])

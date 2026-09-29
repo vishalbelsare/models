@@ -14,6 +14,9 @@ being easy to read.
 These models are used as end-to-end tests, ensuring that the models run
 with the same or improved speed and performance with each new TensorFlow build.
 
+The API documentation of the latest stable release is published to
+[tensorflow.org](https://www.tensorflow.org/api_docs/python/tfm).
+
 ## More models to come!
 
 The team is actively developing new models.
@@ -55,6 +58,7 @@ In the near future, we will add:
 |-------|-------------------|
 | [RetinaNet](vision/MODEL_GARDEN.md) | [Focal Loss for Dense Object Detection](https://arxiv.org/abs/1708.02002) |
 | [Mask R-CNN](vision/MODEL_GARDEN.md) | [Mask R-CNN](https://arxiv.org/abs/1703.06870) |
+| [YOLO](projects/yolo/README.md) | [YOLOv7: Trainable bag-of-freebies sets new state-of-the-art for real-time object detectors](https://arxiv.org/abs/2207.02696) |
 | [SpineNet](vision/MODEL_GARDEN.md) | [SpineNet: Learning Scale-Permuted Backbone for Recognition and Localization](https://arxiv.org/abs/1912.05027) |
 | [Cascade RCNN-RS and RetinaNet-RS](vision/MODEL_GARDEN.md) | [Simple Training Strategies and Model Scaling for Object Detection](https://arxiv.org/abs/2107.00057)|
 
@@ -128,8 +132,7 @@ pip3 install tensorflow-text==2.8.0 # when models in uses `nlp` packages
 
 Starting from 2.9.x release, we release the modeling library as
 `tensorflow_models` package and users can `import tensorflow_models` directly to
-access to the exported symbols. The API documentation is published to
-[tensorflow.org](https://www.tensorflow.org/api_docs/python/tfm). If you are
+access to the exported symbols. If you are
 using the latest nightly version or github code directly, please follow the
 docstrings in the github.
 
@@ -148,7 +151,26 @@ don't recommend earlier versions.
 ### Installation
 
 Please check [here](https://github.com/tensorflow/models#Installation) for the
-instructions
+instructions.
+
+Available pypi packages:
+
+* [tf-models-official](https://pypi.org/project/tf-models-official/)
+* [tf-models-nightly](https://pypi.org/project/tf-models-nightly/): nightly
+release with the latest changes.
+* [tf-models-no-deps](https://pypi.org/project/tf-models-no-deps/): without
+`tensorflow` and `tensorflow-text` in the `install_requires` list.
+
+### Examples and Tutorials
+
+Get started with TensorFlow Model Garden by exploring the provided examples and tutorials:
+
+* [NLP](https://www.tensorflow.org/tfmodels/nlp)
+* [Image classification](https://www.tensorflow.org/tfmodels/vision/image_classification)
+* [Object detection](https://www.tensorflow.org/tfmodels/vision/object_detection)
+* [Semantic Segmentation](https://www.tensorflow.org/tfmodels/vision/semantic_segmentation)
+* [Instance Segmentation](https://www.tensorflow.org/tfmodels/vision/instance_segmentation)
+
 
 ## Contributions
 

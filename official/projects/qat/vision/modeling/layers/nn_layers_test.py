@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,9 +14,8 @@
 
 """Tests for nn_layers."""
 
-# Import libraries
 from absl.testing import parameterized
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 from official.projects.qat.vision.modeling.layers import nn_layers
 
@@ -61,7 +60,7 @@ class NNLayersTest(parameterized.TestCase, tf.test.TestCase):
   )
   def test_spatial_pyramid_pooling_creation(self, pool_kernel_size,
                                             dilation_rates):
-    inputs = tf.keras.Input(shape=(64, 64, 128), dtype=tf.float32)
+    inputs = tf_keras.Input(shape=(64, 64, 128), dtype=tf.float32)
     layer = nn_layers.SpatialPyramidPoolingQuantized(
         output_channels=256,
         dilation_rates=dilation_rates,
@@ -79,7 +78,7 @@ class NNLayersTest(parameterized.TestCase, tf.test.TestCase):
   )
   def test_aspp_creation(self, level, dilation_rates, num_filters):
     input_size = 128 // 2**level
-    tf.keras.backend.set_image_data_format('channels_last')
+    tf_keras.backend.set_image_data_format('channels_last')
     endpoints = tf.random.uniform(
         shape=(2, input_size, input_size, 64), dtype=tf.float32)
 
@@ -93,14 +92,40 @@ class NNLayersTest(parameterized.TestCase, tf.test.TestCase):
 
   @parameterized.parameters(False, True)
   def test_bnorm_wrapper_creation(self, use_sync_bn):
-    inputs = tf.keras.Input(shape=(64, 64, 128), dtype=tf.float32)
+    inputs = tf_keras.Input(shape=(64, 64, 128), dtype=tf.float32)
     if use_sync_bn:
-      norm = tf.keras.layers.experimental.SyncBatchNormalization(axis=-1)
+      norm = tf_keras.layers.experimental.SyncBatchNormalization(axis=-1)
     else:
-      norm = tf.keras.layers.BatchNormalization(axis=-1)
+      norm = tf_keras.layers.BatchNormalization(axis=-1)
     layer = nn_layers.BatchNormalizationWrapper(norm)
     output = layer(inputs)
     self.assertAllEqual([None, 64, 64, 128], output.shape)
+
+  @parameterized.parameters(
+      (1, 1, 64, [4, 4]),
+      (2, 1, 64, [4, 4]),
+      (3, 1, 64, [4, 4]),
+      (1, 2, 32, [8, 8]),
+      (2, 2, 32, [8, 8]),
+      (3, 2, 32, [8, 8]),
+  )
+  def test_mask_scoring_creation(
+      self, num_convs, num_fcs, num_filters, fc_input_size
+  ):
+    inputs = tf_keras.Input(shape=(64, 64, 16), dtype=tf.float32)
+
+    head = nn_layers.MaskScoringQuantized(
+        num_classes=2,
+        num_convs=num_convs,
+        num_filters=num_filters,
+        fc_dims=128,
+        num_fcs=num_fcs,
+        fc_input_size=fc_input_size,
+        use_depthwise_convolution=True,
+    )
+
+    scores = head(inputs)
+    self.assertAllEqual(scores.shape.as_list(), [None, 2])
 
 
 if __name__ == '__main__':

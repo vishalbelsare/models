@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,17 +14,18 @@
 
 """Contains definitions of Residual Networks with Deeplab modifications."""
 
-from typing import Callable, Optional, Tuple, List
+import math
+from typing import Callable, List, Optional, Tuple
 
-import numpy as np
-import tensorflow as tf
+import tensorflow as tf, tf_keras
+
 from official.modeling import hyperparams
 from official.modeling import tf_utils
 from official.vision.modeling.backbones import factory
 from official.vision.modeling.layers import nn_blocks
 from official.vision.modeling.layers import nn_layers
 
-layers = tf.keras.layers
+layers = tf_keras.layers
 
 # Specifications for different ResNet variants.
 # Each entry specifies block configurations of the particular ResNet variant.
@@ -58,8 +59,8 @@ RESNET_SPECS = {
 }
 
 
-@tf.keras.utils.register_keras_serializable(package='Vision')
-class DilatedResNet(tf.keras.Model):
+@tf_keras.utils.register_keras_serializable(package='Vision')
+class DilatedResNet(tf_keras.Model):
   """Creates a ResNet model with Deeplabv3 modifications.
 
   This backbone is suitable for semantic segmentation. This implements
@@ -72,7 +73,7 @@ class DilatedResNet(tf.keras.Model):
       self,
       model_id: int,
       output_stride: int,
-      input_specs: tf.keras.layers.InputSpec = layers.InputSpec(
+      input_specs: tf_keras.layers.InputSpec = layers.InputSpec(
           shape=[None, None, None, 3]),
       stem_type: str = 'v0',
       resnetd_shortcut: bool = False,
@@ -86,8 +87,8 @@ class DilatedResNet(tf.keras.Model):
       norm_momentum: float = 0.99,
       norm_epsilon: float = 0.001,
       kernel_initializer: str = 'VarianceScaling',
-      kernel_regularizer: Optional[tf.keras.regularizers.Regularizer] = None,
-      bias_regularizer: Optional[tf.keras.regularizers.Regularizer] = None,
+      kernel_regularizer: Optional[tf_keras.regularizers.Regularizer] = None,
+      bias_regularizer: Optional[tf_keras.regularizers.Regularizer] = None,
       **kwargs):
     """Initializes a ResNet model with DeepLab modification.
 
@@ -95,7 +96,7 @@ class DilatedResNet(tf.keras.Model):
       model_id: An `int` specifies depth of ResNet backbone model.
       output_stride: An `int` of output stride, ratio of input to output
         resolution.
-      input_specs: A `tf.keras.layers.InputSpec` of the input tensor.
+      input_specs: A `tf_keras.layers.InputSpec` of the input tensor.
       stem_type: A `str` of stem type. Can be `v0` or `v1`. `v1` replaces 7x7
         conv by 3 3x3 convs.
       resnetd_shortcut: A `bool` of whether to use ResNet-D shortcut in
@@ -113,9 +114,9 @@ class DilatedResNet(tf.keras.Model):
       norm_momentum: A `float` of normalization momentum for the moving average.
       norm_epsilon: A `float` added to variance to avoid dividing by zero.
       kernel_initializer: A str for kernel initializer of convolutional layers.
-      kernel_regularizer: A `tf.keras.regularizers.Regularizer` object for
+      kernel_regularizer: A `tf_keras.regularizers.Regularizer` object for
         Conv2D. Default to None.
-      bias_regularizer: A `tf.keras.regularizers.Regularizer` object for Conv2D.
+      bias_regularizer: A `tf_keras.regularizers.Regularizer` object for Conv2D.
         Default to None.
       **kwargs: Additional keyword arguments to be passed.
     """
@@ -126,10 +127,7 @@ class DilatedResNet(tf.keras.Model):
     self._activation = activation
     self._norm_momentum = norm_momentum
     self._norm_epsilon = norm_epsilon
-    if use_sync_bn:
-      self._norm = layers.experimental.SyncBatchNormalization
-    else:
-      self._norm = layers.BatchNormalization
+    self._norm = layers.BatchNormalization
     self._kernel_initializer = kernel_initializer
     self._kernel_regularizer = kernel_regularizer
     self._bias_regularizer = bias_regularizer
@@ -139,13 +137,13 @@ class DilatedResNet(tf.keras.Model):
     self._se_ratio = se_ratio
     self._init_stochastic_depth_rate = init_stochastic_depth_rate
 
-    if tf.keras.backend.image_data_format() == 'channels_last':
+    if tf_keras.backend.image_data_format() == 'channels_last':
       bn_axis = -1
     else:
       bn_axis = 1
 
     # Build ResNet.
-    inputs = tf.keras.Input(shape=input_specs.shape[1:])
+    inputs = tf_keras.Input(shape=input_specs.shape[1:])
 
     if stem_type == 'v0':
       x = layers.Conv2D(
@@ -159,7 +157,10 @@ class DilatedResNet(tf.keras.Model):
           bias_regularizer=self._bias_regularizer)(
               inputs)
       x = self._norm(
-          axis=bn_axis, momentum=norm_momentum, epsilon=norm_epsilon)(
+          axis=bn_axis,
+          momentum=norm_momentum,
+          epsilon=norm_epsilon,
+          synchronized=use_sync_bn)(
               x)
       x = tf_utils.get_activation(activation)(x)
     elif stem_type == 'v1':
@@ -174,7 +175,10 @@ class DilatedResNet(tf.keras.Model):
           bias_regularizer=self._bias_regularizer)(
               inputs)
       x = self._norm(
-          axis=bn_axis, momentum=norm_momentum, epsilon=norm_epsilon)(
+          axis=bn_axis,
+          momentum=norm_momentum,
+          epsilon=norm_epsilon,
+          synchronized=use_sync_bn)(
               x)
       x = tf_utils.get_activation(activation)(x)
       x = layers.Conv2D(
@@ -188,7 +192,10 @@ class DilatedResNet(tf.keras.Model):
           bias_regularizer=self._bias_regularizer)(
               x)
       x = self._norm(
-          axis=bn_axis, momentum=norm_momentum, epsilon=norm_epsilon)(
+          axis=bn_axis,
+          momentum=norm_momentum,
+          epsilon=norm_epsilon,
+          synchronized=use_sync_bn)(
               x)
       x = tf_utils.get_activation(activation)(x)
       x = layers.Conv2D(
@@ -202,7 +209,10 @@ class DilatedResNet(tf.keras.Model):
           bias_regularizer=self._bias_regularizer)(
               x)
       x = self._norm(
-          axis=bn_axis, momentum=norm_momentum, epsilon=norm_epsilon)(
+          axis=bn_axis,
+          momentum=norm_momentum,
+          epsilon=norm_epsilon,
+          synchronized=use_sync_bn)(
               x)
       x = tf_utils.get_activation(activation)(x)
     else:
@@ -220,13 +230,16 @@ class DilatedResNet(tf.keras.Model):
           bias_regularizer=self._bias_regularizer)(
               x)
       x = self._norm(
-          axis=bn_axis, momentum=norm_momentum, epsilon=norm_epsilon)(
+          axis=bn_axis,
+          momentum=norm_momentum,
+          epsilon=norm_epsilon,
+          synchronized=use_sync_bn)(
               x)
       x = tf_utils.get_activation(activation, use_keras_layer=True)(x)
     else:
       x = layers.MaxPool2D(pool_size=3, strides=2, padding='same')(x)
 
-    normal_resnet_stage = int(np.math.log2(self._output_stride)) - 2
+    normal_resnet_stage = int(math.log2(self._output_stride)) - 2
 
     endpoints = {}
     for i in range(normal_resnet_stage + 1):
@@ -263,7 +276,7 @@ class DilatedResNet(tf.keras.Model):
           block_repeats=spec[2],
           stochastic_depth_drop_rate=nn_layers.get_stochastic_depth_rate(
               self._init_stochastic_depth_rate, i + 2, 4 + last_stage_repeats),
-          multigrid=multigrid if i >= 3 else None,
+          multigrid=multigrid if i >= 3 else None,  # pyrefly: ignore[bad-argument-type]
           name='block_group_l{}'.format(i + 2))
       dilation_rate *= 2
 
@@ -279,7 +292,7 @@ class DilatedResNet(tf.keras.Model):
                    filters: int,
                    strides: int,
                    dilation_rate: int,
-                   block_fn: Callable[..., tf.keras.layers.Layer],
+                   block_fn: Callable[..., tf_keras.layers.Layer],
                    block_repeats: int = 1,
                    stochastic_depth_drop_rate: float = 0.0,
                    multigrid: Optional[List[int]] = None,
@@ -380,10 +393,10 @@ class DilatedResNet(tf.keras.Model):
 
 @factory.register_backbone_builder('dilated_resnet')
 def build_dilated_resnet(
-    input_specs: tf.keras.layers.InputSpec,
+    input_specs: tf_keras.layers.InputSpec,
     backbone_config: hyperparams.Config,
     norm_activation_config: hyperparams.Config,
-    l2_regularizer: tf.keras.regularizers.Regularizer = None) -> tf.keras.Model:  # pytype: disable=annotation-type-mismatch  # typed-keras
+    l2_regularizer: tf_keras.regularizers.Regularizer = None) -> tf_keras.Model:  # pytype: disable=annotation-type-mismatch  # typed-keras
   """Builds ResNet backbone from a config."""
   backbone_type = backbone_config.type
   backbone_cfg = backbone_config.get()

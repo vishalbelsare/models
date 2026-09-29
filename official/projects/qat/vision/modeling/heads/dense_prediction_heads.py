@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,15 +13,10 @@
 # limitations under the License.
 
 """Contains definitions of dense prediction heads."""
-from __future__ import annotations
-
-import copy
-from typing import Any, Dict, List, Mapping, Optional, Union, Type
-
-# Import libraries
+from typing import List, Mapping, Union, Optional, Any, Dict
 
 import numpy as np
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 import tensorflow_model_optimization as tfmot
 from official.modeling import tf_utils
@@ -29,82 +24,8 @@ from official.projects.qat.vision.quantization import configs
 from official.projects.qat.vision.quantization import helper
 
 
-class SeparableConv2DQuantized(tf.keras.layers.Layer):
-  """Quantized SeperableConv2D."""
-
-  def __init__(self,
-               name: Optional[str] = None,
-               last_quantize: bool = False,
-               **conv_kwargs):
-    """Initializes a SeparableConv2DQuantized.
-
-    Args:
-      name: The name of the layer.
-      last_quantize: A `bool` indicates whether add quantization for the output.
-      **conv_kwargs: A keyword arguments to be used for conv and dwconv.
-    """
-
-    super().__init__(name=name)
-    self._conv_kwargs = copy.deepcopy(conv_kwargs)
-    self._name = name
-    self._last_quantize = last_quantize
-
-  def build(self, input_shape: Union[tf.TensorShape, List[tf.TensorShape]]):
-    """Creates the child layers of the layer."""
-    depthwise_conv2d_quantized = helper.quantize_wrapped_layer(
-        tf.keras.layers.DepthwiseConv2D,
-        configs.Default8BitConvQuantizeConfig(
-            ['depthwise_kernel'], [], True))
-    conv2d_quantized = helper.quantize_wrapped_layer(
-        tf.keras.layers.Conv2D,
-        configs.Default8BitConvQuantizeConfig(
-            ['kernel'], [], self._last_quantize))
-
-    dwconv_kwargs = self._conv_kwargs.copy()
-    # Depthwise conv input filters is always equal to output filters.
-    # This filters argument only needed for the point-wise conv2d op.
-    del dwconv_kwargs['filters']
-    dwconv_kwargs.update({
-        'activation': None,
-        'use_bias': False,
-    })
-    self.dw_conv = depthwise_conv2d_quantized(name='dw', **dwconv_kwargs)
-
-    conv_kwargs = self._conv_kwargs.copy()
-    conv_kwargs.update({
-        'kernel_size': (1, 1),
-        'strides': (1, 1),
-        'padding': 'valid',
-        'groups': 1,
-    })
-
-    self.conv = conv2d_quantized(name='pw', **conv_kwargs)
-
-  def call(self, inputs: tf.Tensor) -> tf.Tensor:
-    """Call the separable conv layer."""
-    x = self.dw_conv(inputs)
-    outputs = self.conv(x)
-    return outputs
-
-  def get_config(self) -> Dict[str, Any]:
-    """Returns the config of the layer."""
-    config = self._conv_kwargs.copy()
-    config.update({
-        'name': self._name,
-        'last_quantize': self._last_quantize,
-    })
-    return config
-
-  @classmethod
-  def from_config(
-      cls: Type[SeparableConv2DQuantized],
-      config: Dict[str, Any]) -> SeparableConv2DQuantized:
-    """Creates a layer from its config."""
-    return cls(**config)
-
-
-@tf.keras.utils.register_keras_serializable(package='Vision')
-class RetinaNetHeadQuantized(tf.keras.layers.Layer):
+@tf_keras.utils.register_keras_serializable(package='Vision')
+class RetinaNetHeadQuantized(tf_keras.layers.Layer):
   """Creates a RetinaNet quantized head."""
 
   def __init__(
@@ -121,10 +42,11 @@ class RetinaNetHeadQuantized(tf.keras.layers.Layer):
       use_sync_bn: bool = False,
       norm_momentum: float = 0.99,
       norm_epsilon: float = 0.001,
-      kernel_regularizer: Optional[tf.keras.regularizers.Regularizer] = None,
-      bias_regularizer: Optional[tf.keras.regularizers.Regularizer] = None,
+      kernel_regularizer: Optional[tf_keras.regularizers.Regularizer] = None,
+      bias_regularizer: Optional[tf_keras.regularizers.Regularizer] = None,
       num_params_per_anchor: int = 4,
       share_classification_heads: bool = False,
+      share_level_convs: bool = True,
       **kwargs):
     """Initializes a RetinaNet quantized head.
 
@@ -139,9 +61,10 @@ class RetinaNetHeadQuantized(tf.keras.layers.Layer):
       num_filters: An `int` number that represents the number of filters of the
         intermediate conv layers.
       attribute_heads: If not None, a list that contains a dict for each
-        additional attribute head. Each dict consists of 3 key-value pairs:
-        `name`, `type` ('regression' or 'classification'), and `size` (number
-        of predicted values for each instance).
+        additional attribute head. Each dict consists of 4 key-value pairs:
+        `name`, `type` ('regression' or 'classification'), `size` (number of
+        predicted values for each instance), and `prediction_tower_name`
+        (optional, specifies shared prediction towers.)
       use_separable_conv: A `bool` that indicates whether the separable
         convolution layers is used.
       activation: A `str` that indicates which activation is used, e.g. 'relu',
@@ -150,19 +73,24 @@ class RetinaNetHeadQuantized(tf.keras.layers.Layer):
         normalization across different replicas.
       norm_momentum: A `float` of normalization momentum for the moving average.
       norm_epsilon: A `float` added to variance to avoid dividing by zero.
-      kernel_regularizer: A `tf.keras.regularizers.Regularizer` object for
+      kernel_regularizer: A `tf_keras.regularizers.Regularizer` object for
         Conv2D. Default is None.
-      bias_regularizer: A `tf.keras.regularizers.Regularizer` object for Conv2D.
+      bias_regularizer: A `tf_keras.regularizers.Regularizer` object for Conv2D.
       num_params_per_anchor: Number of parameters required to specify an anchor
         box. For example, `num_params_per_anchor` would be 4 for axis-aligned
         anchor boxes specified by their y-centers, x-centers, heights, and
         widths.
-      share_classification_heads: A `bool` that indicates whethere
-        sharing weights among the main and attribute classification heads. Not
-        used in the QAT model.
+      share_classification_heads: A `bool` that indicates whethere sharing
+        weights among the main and attribute classification heads. Not used in
+        the QAT model.
+      share_level_convs: An optional bool to enable sharing convs
+        across levels for classnet, boxnet, classifier and box regressor.
+        If True, convs will be shared across all levels. Not used in the QAT
+        model.
       **kwargs: Additional keyword arguments to be passed.
     """
     del share_classification_heads
+    del share_level_convs
 
     super().__init__(**kwargs)
     self._config_dict = {
@@ -183,7 +111,7 @@ class RetinaNetHeadQuantized(tf.keras.layers.Layer):
         'num_params_per_anchor': num_params_per_anchor,
     }
 
-    if tf.keras.backend.image_data_format() == 'channels_last':
+    if tf_keras.backend.image_data_format() == 'channels_last':
       self._bn_axis = -1
     else:
       self._bn_axis = 1
@@ -194,10 +122,10 @@ class RetinaNetHeadQuantized(tf.keras.layers.Layer):
   def build(self, input_shape: Union[tf.TensorShape, List[tf.TensorShape]]):
     """Creates the variables of the head."""
     if self._config_dict['use_separable_conv']:
-      conv_op = SeparableConv2DQuantized
+      conv_op = helper.SeparableConv2DQuantized
     else:
       conv_op = helper.quantize_wrapped_layer(
-          tf.keras.layers.Conv2D,
+          tf_keras.layers.Conv2D,
           configs.Default8BitConvQuantizeConfig(
               ['kernel'], ['activation'], False))
     conv_kwargs = {
@@ -208,15 +136,15 @@ class RetinaNetHeadQuantized(tf.keras.layers.Layer):
         'bias_regularizer': self._config_dict['bias_regularizer'],
     }
     if not self._config_dict['use_separable_conv']:
-      conv_kwargs.update({
-          'kernel_initializer': tf.keras.initializers.RandomNormal(
+      conv_kwargs.update({  # pyrefly: ignore[no-matching-overload]
+          'kernel_initializer': tf_keras.initializers.RandomNormal(
               stddev=0.01),
           'kernel_regularizer': self._config_dict['kernel_regularizer'],
       })
 
-    base_bn_op = (tf.keras.layers.experimental.SyncBatchNormalization
+    base_bn_op = (tf_keras.layers.experimental.SyncBatchNormalization
                   if self._config_dict['use_sync_bn']
-                  else tf.keras.layers.BatchNormalization)
+                  else tf_keras.layers.BatchNormalization)
     bn_op = helper.norm_by_activation(
         self._config_dict['activation'],
         helper.quantize_wrapped_layer(
@@ -254,8 +182,8 @@ class RetinaNetHeadQuantized(tf.keras.layers.Layer):
         'bias_regularizer': self._config_dict['bias_regularizer'],
     }
     if not self._config_dict['use_separable_conv']:
-      classifier_kwargs.update({
-          'kernel_initializer': tf.keras.initializers.RandomNormal(stddev=1e-5),
+      classifier_kwargs.update({  # pyrefly: ignore[no-matching-overload]
+          'kernel_initializer': tf_keras.initializers.RandomNormal(stddev=1e-5),
           'kernel_regularizer': self._config_dict['kernel_regularizer'],
       })
     self._classifier = conv_op(
@@ -284,8 +212,8 @@ class RetinaNetHeadQuantized(tf.keras.layers.Layer):
         'bias_regularizer': self._config_dict['bias_regularizer'],
     }
     if not self._config_dict['use_separable_conv']:
-      box_regressor_kwargs.update({
-          'kernel_initializer': tf.keras.initializers.RandomNormal(
+      box_regressor_kwargs.update({  # pyrefly: ignore[no-matching-overload]
+          'kernel_initializer': tf_keras.initializers.RandomNormal(
               stddev=1e-5),
           'kernel_regularizer': self._config_dict['kernel_regularizer'],
       })
@@ -343,7 +271,7 @@ class RetinaNetHeadQuantized(tf.keras.layers.Layer):
         if not self._config_dict['use_separable_conv']:
           att_predictor_kwargs.update({
               'kernel_initializer':
-                  tf.keras.initializers.RandomNormal(stddev=1e-5),
+                  tf_keras.initializers.RandomNormal(stddev=1e-5),
               'kernel_regularizer':
                   self._config_dict['kernel_regularizer'],
           })
@@ -417,15 +345,31 @@ class RetinaNetHeadQuantized(tf.keras.layers.Layer):
 
       # attribute nets.
       if self._config_dict['attribute_heads']:
+        prediction_tower_output = {}
         for att_config in self._config_dict['attribute_heads']:
           att_name = att_config['name']
-          x = this_level_features
-          for conv, norm in zip(self._att_convs[att_name],
-                                self._att_norms[att_name][i]):
-            x = conv(x)
-            x = norm(x)
-            x = self._activation(x)
-          attributes[att_name][str(level)] = self._att_predictors[att_name](x)
+
+          def build_prediction_tower(atttribute_name, features, feature_level):
+            x = features
+            for conv, norm in zip(
+                self._att_convs[atttribute_name],
+                self._att_norms[atttribute_name][feature_level]):
+              x = conv(x)
+              x = norm(x)
+              x = self._activation(x)
+            return x
+
+          prediction_tower_name = att_config['prediction_tower_name']
+          if not prediction_tower_name:
+            attributes[att_name][str(level)] = self._att_predictors[att_name](
+                build_prediction_tower(att_name, this_level_features, i))
+          else:
+            if prediction_tower_name not in prediction_tower_output:
+              prediction_tower_output[
+                  prediction_tower_name] = build_prediction_tower(
+                      att_name, this_level_features, i)
+            attributes[att_name][str(level)] = self._att_predictors[att_name](
+                prediction_tower_output[prediction_tower_name])
 
     return scores, boxes, attributes
 
@@ -435,4 +379,3 @@ class RetinaNetHeadQuantized(tf.keras.layers.Layer):
   @classmethod
   def from_config(cls, config):
     return cls(**config)
-

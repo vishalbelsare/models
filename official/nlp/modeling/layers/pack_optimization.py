@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 """Pack sequence optimization on accelerators."""
 from typing import Dict
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 from official.modeling import tf_utils
 from official.nlp.modeling.layers import rezero_transformer
 from official.nlp.modeling.layers import self_attention_mask
@@ -22,8 +22,8 @@ from official.nlp.modeling.layers import transformer_encoder_block
 from official.nlp.modeling.layers import transformer_scaffold
 
 
-@tf.keras.utils.register_keras_serializable(package='Text')
-class PackBertEmbeddings(tf.keras.layers.Layer):
+@tf_keras.utils.register_keras_serializable(package='Text')
+class PackBertEmbeddings(tf_keras.layers.Layer):
   """Performs packing tricks for BERT inputs to improve TPU utilization."""
 
   def __init__(self, pack_sequences: int, **kwargs):
@@ -62,7 +62,7 @@ class PackBertEmbeddings(tf.keras.layers.Layer):
         combined_attention_mask=combined_attention_mask)
 
 
-@tf.keras.utils.register_keras_serializable(package='Text')
+@tf_keras.utils.register_keras_serializable(package='Text')
 class StridedTransformerEncoderBlock(
     transformer_encoder_block.TransformerEncoderBlock):
   """Transformer layer for packing optimization to stride over inputs."""
@@ -72,6 +72,10 @@ class StridedTransformerEncoderBlock(
     if self._output_range is not None:
       raise ValueError('StridedTransformerEncoderBlock does not '
                        'support `output_range` argument.')
+    # TODO(b/337888023): Support block sparse attention with strided inputs.
+    if self._src_block_size is not None:
+      raise ValueError('StridedTransformerEncoderBlock does not '
+                       'support block sparse attention.')
 
   def call(self, inputs, stride: tf.Tensor):
     if isinstance(inputs, (list, tuple)):
@@ -106,7 +110,7 @@ class StridedTransformerEncoderBlock(
       # `self._use_query_residual` into one if clause because else is only for
       # `_norm_first == False`.
       if self._use_query_residual:
-        attention_output = source_tensor + attention_output
+        attention_output = source_tensor + attention_output  # pyrefly: ignore[unbound-name]
     else:
       if self._use_query_residual:
         attention_output = target_tensor + attention_output
@@ -122,13 +126,13 @@ class StridedTransformerEncoderBlock(
     layer_output = self._output_dropout(layer_output)
 
     if self._norm_first:
-      return source_attention_output + layer_output
+      return source_attention_output + layer_output  # pyrefly: ignore[unbound-name]
 
     layer_output = tf.cast(layer_output, tf.float32)
     return self._output_layer_norm(layer_output + attention_output)
 
 
-@tf.keras.utils.register_keras_serializable(package='Text')
+@tf_keras.utils.register_keras_serializable(package='Text')
 class StridedReZeroTransformer(rezero_transformer.ReZeroTransformer):
   """ReZeroTransformer for packing optimization to stride over inputs."""
 
@@ -137,6 +141,10 @@ class StridedReZeroTransformer(rezero_transformer.ReZeroTransformer):
     if self._output_range is not None:
       raise ValueError(f'{self.__class__} does not '
                        'support `output_range` argument.')
+    # TODO(b/337888023): Support block sparse attention with strided inputs.
+    if self._src_block_size is not None:
+      raise ValueError(f'{self.__class__} does not '
+                       'support block sparse attention.')
 
   def call(self, inputs, stride: tf.Tensor):
     if isinstance(inputs, (list, tuple)):
@@ -179,7 +187,7 @@ class StridedReZeroTransformer(rezero_transformer.ReZeroTransformer):
     return layer_output
 
 
-@tf.keras.utils.register_keras_serializable(package='Text')
+@tf_keras.utils.register_keras_serializable(package='Text')
 class StridedTransformerScaffold(transformer_scaffold.TransformerScaffold):
   """TransformerScaffold for packing optimization to stride over inputs."""
 
@@ -215,7 +223,7 @@ class StridedTransformerScaffold(transformer_scaffold.TransformerScaffold):
         attention_output, training=training)
 
     if self._norm_first:
-      attention_output = source_tensor + attention_output
+      attention_output = source_tensor + attention_output  # pyrefly: ignore[unbound-name]
     else:
       attention_output = self._attention_layer_norm(
           target_tensor + attention_output, training=training)
@@ -232,7 +240,7 @@ class StridedTransformerScaffold(transformer_scaffold.TransformerScaffold):
       layer_output = self._output_dropout(layer_output, training=training)
       layer_output = tf.cast(layer_output, tf.float32)
       if self._norm_first:
-        layer_output = source_attention_output + layer_output
+        layer_output = source_attention_output + layer_output  # pyrefly: ignore[unbound-name]
       else:
         layer_output = self._output_layer_norm(
             layer_output + attention_output, training=training)
@@ -241,7 +249,7 @@ class StridedTransformerScaffold(transformer_scaffold.TransformerScaffold):
         # if norm_first, assume the feedforward block will not apply layer norm
         layer_output = self._feedforward_block(
             attention_output, training=training)
-        layer_output += source_attention_output
+        layer_output += source_attention_output  # pyrefly: ignore[unbound-name]
       else:
         # if not norm_first, assume that the feedforwad does apply layer norm
         layer_output = self._feedforward_block(

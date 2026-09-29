@@ -19,10 +19,10 @@ from __future__ import division
 from __future__ import print_function
 import os
 import unittest
+from google.protobuf import text_format
 import numpy as np
 import six
 import tensorflow.compat.v1 as tf
-from google.protobuf import text_format
 from tensorflow.python.framework import dtypes
 from tensorflow.python.ops import array_ops
 from tensorflow.python.tools import strip_unused_lib
@@ -39,7 +39,7 @@ from object_detection.utils import variables_helper
 if six.PY2:
   import mock  # pylint: disable=g-import-not-at-top
 else:
-  mock = unittest.mock  # pylint: disable=g-import-not-at-top, g-importing-member
+  from unittest import mock  # pylint: disable=g-import-not-at-top, g-importing-member
 
 # pylint: disable=g-import-not-at-top
 try:
@@ -665,7 +665,7 @@ class ExportInferenceGraphTest(tf.test.TestCase):
       keypoints = inference_graph.get_tensor_by_name('detection_keypoints:0')
       masks = inference_graph.get_tensor_by_name('detection_masks:0')
       num_detections = inference_graph.get_tensor_by_name('num_detections:0')
-      with self.assertRaisesRegexp(tf.errors.InvalidArgumentError,
+      with self.assertRaisesRegex(tf.errors.InvalidArgumentError,
                                    'TensorArray.*shape'):
         sess.run(
             [boxes, scores, classes, keypoints, masks, num_detections],

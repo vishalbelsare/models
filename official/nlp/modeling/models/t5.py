@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ import math
 from typing import Callable, Dict, Optional, Sequence, Text, Union
 
 import numpy as np
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 from official.modeling import tf_utils
 
@@ -157,7 +157,7 @@ class Embed(Module):
     if embeddings_initializer:
       self.embed_init = embeddings_initializer
     else:
-      self.embed_init = tf.keras.initializers.TruncatedNormal(stddev=1.0)
+      self.embed_init = tf_keras.initializers.TruncatedNormal(stddev=1.0)
     with self.name_scope:
       self.embeddings = self.create_variable(
           "embedding", [self.vocab_size, self.features],
@@ -224,7 +224,7 @@ class RMSNorm(Module):
       self.weight = self.create_variable(
           "scale", [hidden_size],
           dtype=self.dtype,
-          initializer=tf.keras.initializers.Ones())
+          initializer=tf_keras.initializers.Ones())
 
   @tf.Module.with_name_scope
   def __call__(self, x):
@@ -254,14 +254,14 @@ class Linear(Module):
     self.use_bias = use_bias
     self.w_init = w_init
     if self.use_bias:
-      self.b_init = b_init if b_init else tf.keras.initializers.Zeros()
+      self.b_init = b_init if b_init else tf_keras.initializers.Zeros()
     elif b_init is not None:
       raise ValueError("When not using a bias the b_init must be None.")
 
     with self.name_scope:
       if self.w_init is None:
         stddev = 1 / math.sqrt(self.in_features)
-        self.w_init = tf.keras.initializers.HeNormal()
+        self.w_init = tf_keras.initializers.HeNormal()
 
       self.w = self.create_variable(
           "kernel", [self.in_features, self.out_features],
@@ -322,13 +322,13 @@ class Linear3D(Module):
       self.bias_shape = (self.out_features,)
       bias_rank = 1
     if self.use_bias:
-      self.b_init = b_init or tf.keras.initializers.Zeros()
+      self.b_init = b_init or tf_keras.initializers.Zeros()
     elif b_init is not None:
       raise ValueError("When not using a bias the b_init must be None.")
 
     with self.name_scope:
       if self.w_init is None:
-        self.w_init = tf.keras.initializers.HeNormal()
+        self.w_init = tf_keras.initializers.HeNormal()
 
       self.w = self.create_variable(
           "kernel",
@@ -445,7 +445,7 @@ class FFN(Module):
           b_init=bias_initializer,
           dtype=self.dtype,
           name="wo")
-      self.dropout = Dropout(rate=dropout_rate)
+      self.dropout = Dropout(rate=dropout_rate)  # pyrefly: ignore[bad-argument-type]
 
   @tf.Module.with_name_scope
   def __call__(self,
@@ -589,8 +589,8 @@ class MultiHeadAttention(Module):
         init_std_rescaling = tf.math.sqrt(tf.cast(self.d_kv, dtype=self.dtype))
         query_w_init = (
             lambda *args, **kwargs: (  # pylint: disable=g-long-lambda
-                tf_utils.clone_initializer(weight_initializer)(
-                    *args, **kwargs) / init_std_rescaling))
+                tf_utils.clone_initializer(weight_initializer)
+                (*args, **kwargs) / init_std_rescaling))
       self.q = Linear3D(
           self.d_model,
           self.d_kv,
@@ -628,7 +628,7 @@ class MultiHeadAttention(Module):
           b_init=bias_initializer,
           dtype=self.dtype,
           name="o")
-      self.dropout = Dropout(dropout_rate)
+      self.dropout = Dropout(dropout_rate)  # pyrefly: ignore[bad-argument-type]
 
   def _update_cache(self, key, value, cache, decode_position):
     """Updates cache states and gets full-length key/value tensors."""
@@ -707,6 +707,7 @@ class MultiHeadAttention(Module):
     if mask is not None:
       scores += mask  # (bs, n_heads, qlen, klen)
     weights = tf.nn.softmax(tf.cast(scores, tf.float32), axis=-1)
+    output_scores = weights
     # weights shape = (bs, n_heads, qlen, klen)
     weights = tf.cast(weights, scores.dtype)
     weight_shape = tf_utils.get_shape_list(weights)
@@ -720,6 +721,7 @@ class MultiHeadAttention(Module):
     c = self.o(c)
 
     outputs = dict(context=c)
+    outputs["attention_scores"] = output_scores
     if cache:
       outputs["cache"] = cache
     return outputs
@@ -752,10 +754,10 @@ class SelfAttention(Module):
           name="attention")
       self.layer_norm = RMSNorm(
           hidden_size=d_model,
-          epsilon=layer_norm_epsilon,
+          epsilon=layer_norm_epsilon,  # pyrefly: ignore[bad-argument-type]
           dtype=self.dtype,
           name="layer_norm")
-      self.dropout = Dropout(dropout_rate)
+      self.dropout = Dropout(dropout_rate)  # pyrefly: ignore[bad-argument-type]
 
   @tf.Module.with_name_scope
   def __call__(self,
@@ -809,10 +811,10 @@ class CrossAttention(Module):
           name="attention")
       self.layer_norm = RMSNorm(
           hidden_size=d_model,
-          epsilon=layer_norm_epsilon,
+          epsilon=layer_norm_epsilon,  # pyrefly: ignore[bad-argument-type]
           dtype=self.dtype,
           name="layer_norm")
-      self.dropout = Dropout(dropout_rate)
+      self.dropout = Dropout(dropout_rate)  # pyrefly: ignore[bad-argument-type]
 
   @tf.Module.with_name_scope
   def __call__(self,
@@ -853,6 +855,7 @@ class EncoderBlock(Module):
                rescale_query: bool = False,
                weight_initializer: Optional[Initializer] = None,
                bias_initializer: Optional[Initializer] = None,
+               return_attention_scores: bool = False,
                **kwargs):
     super().__init__(**kwargs)
     with self.name_scope:
@@ -868,7 +871,7 @@ class EncoderBlock(Module):
           name="self_attention")
       self.ffn_layer_norm = RMSNorm(
           hidden_size=d_model,
-          epsilon=layer_norm_epsilon,
+          epsilon=layer_norm_epsilon,  # pyrefly: ignore[bad-argument-type]
           dtype=self.dtype,
           name="ffn_layer_norm")
       self.ffn = FFN(
@@ -880,7 +883,8 @@ class EncoderBlock(Module):
           bias_initializer=bias_initializer,
           dtype=self.dtype,
           name="ffn")
-      self.ffn_output_dropout = Dropout(dropout_rate)
+      self.ffn_output_dropout = Dropout(dropout_rate)  # pyrefly: ignore[bad-argument-type]
+      self.return_attention_scores = return_attention_scores
 
   @tf.Module.with_name_scope
   def __call__(self,
@@ -902,7 +906,8 @@ class EncoderBlock(Module):
     ffn_output = self.ffn_output_dropout(
         ffn_output, noise_shape=tensor_shape, training=training)
     ffn_output = attn_output + ffn_output
-
+    if self.return_attention_scores:
+      return ffn_output, attention_outputs["attention_scores"]
     return ffn_output
 
 
@@ -945,7 +950,7 @@ class EncDecoderBlock(Module):
           name="cross_attention")
       self.ffn_layer_norm = RMSNorm(
           hidden_size=d_model,
-          epsilon=layer_norm_epsilon,
+          epsilon=layer_norm_epsilon,  # pyrefly: ignore[bad-argument-type]
           dtype=self.dtype,
           name="ffn_layer_norm")
       self.ffn = FFN(
@@ -957,7 +962,7 @@ class EncDecoderBlock(Module):
           bias_initializer=bias_initializer,
           dtype=self.dtype,
           name="ffn")
-      self.ffn_output_dropout = Dropout(dropout_rate,)
+      self.ffn_output_dropout = Dropout(dropout_rate,)  # pyrefly: ignore[bad-argument-type]
 
   @tf.Module.with_name_scope
   def __call__(self,
@@ -1014,7 +1019,7 @@ class T5TransformerParams:
   relative_attention_num_buckets: int = 32
   relative_attention_max_distance: int = 128
   relative_embeddings_initializer: Optional[Initializer] = None
-  weight_initializer: Optional[Initializer] = (tf.keras.initializers.HeNormal())
+  weight_initializer: Optional[Initializer] = (tf_keras.initializers.HeNormal())
   bias_initializer: Optional[Initializer] = None
   rescale_query: bool = False
   bidirectional: bool = True
@@ -1023,6 +1028,10 @@ class T5TransformerParams:
   num_decoder_layers: Optional[int] = None
   one_hot_embedding: bool = True
   layer_sharing: bool = False
+  # If true, uses one relative embedding for all encoder layers and one for all
+  # decoder layers. Otherwise, have relative embedding for each layer.
+  use_shared_relative_position_bias: bool = True
+  return_attention_scores: bool = False
 
 
 class Encoder(Module):
@@ -1051,17 +1060,34 @@ class Encoder(Module):
         self.input_embed = shared_embedding
       # Creates an alias to the input embed for encoder-only models.
       self.word_embed = self.input_embed
-      self.relative_embedding = RelativePositionEmbedding(
-          num_heads=self.config.num_heads,
-          relative_attention_num_buckets=self.config
-          .relative_attention_num_buckets,
-          relative_attention_max_distance=self.config
-          .relative_attention_max_distance,
-          bidirectional=self.config.bidirectional,
-          embeddings_initializer=self.config.relative_embeddings_initializer,
-          dtype=self.dtype,
-          compute_dtype=self.compute_dtype,
-          name="relative_posemb")
+      if config.use_shared_relative_position_bias:
+        self.relative_embedding = RelativePositionEmbedding(
+            num_heads=self.config.num_heads,
+            relative_attention_num_buckets=self.config
+            .relative_attention_num_buckets,
+            relative_attention_max_distance=self.config
+            .relative_attention_max_distance,
+            bidirectional=self.config.bidirectional,
+            embeddings_initializer=self.config.relative_embeddings_initializer,
+            dtype=self.dtype,
+            compute_dtype=self.compute_dtype,
+            name="relative_posemb")
+      else:
+        self.relative_embeddings = []
+        for layer_idx in range(self.config.num_layers):
+          relative_embedding = RelativePositionEmbedding(
+              num_heads=self.config.num_heads,
+              relative_attention_num_buckets=self.config
+              .relative_attention_num_buckets,
+              relative_attention_max_distance=self.config
+              .relative_attention_max_distance,
+              bidirectional=self.config.bidirectional,
+              embeddings_initializer=self.config
+              .relative_embeddings_initializer,
+              dtype=self.dtype,
+              compute_dtype=self.compute_dtype,
+              name=f"relative_posemb_{layer_idx}")
+          self.relative_embeddings.append(relative_embedding)
       self.input_dropout = Dropout(self.config.dropout_rate,)
       self.encoder_layers = []
       for layer_idx in range(self.config.num_layers):
@@ -1079,6 +1105,7 @@ class Encoder(Module):
                   rescale_query=self.config.rescale_query,
                   weight_initializer=self.config.weight_initializer,
                   bias_initializer=self.config.bias_initializer,
+                  return_attention_scores=self.config.return_attention_scores,
                   dtype=self.dtype,
                   name="encoder_block_%d" % layer_idx))
       self.output_norm = RMSNorm(
@@ -1087,6 +1114,26 @@ class Encoder(Module):
           dtype=self.dtype,
           name="final_layer_norm")
       self.output_dropout = Dropout(self.config.dropout_rate,)
+
+  @tf.Module.with_name_scope
+  def get_relpos_bias(self,
+                      input_length: int,
+                      dense_inputs: tf.Tensor,
+                      layer_idx: Optional[int] = None) -> tf.Tensor:
+    if self.config.use_shared_relative_position_bias:
+      position_bias = self.relative_embedding(input_length, input_length)
+    else:
+      position_bias = self.relative_embeddings[layer_idx](input_length,  # pyrefly: ignore[bad-index]
+                                                          input_length)
+    if dense_inputs is not None:
+      # Here we ignore relative position bias for dense embeddings.
+      # TODO(yejiayu): If we proceed to video use cases, rework this part.
+      dense_input_length = tf_utils.get_shape_list(dense_inputs)[1]
+      # Position bias shape: [batch, 1, len, len]
+      paddings = tf.constant([[0, 0], [0, 0], [0, dense_input_length],
+                              [0, dense_input_length]])
+      position_bias = tf.pad(position_bias, paddings, "CONSTANT")
+    return position_bias
 
   @tf.Module.with_name_scope
   def __call__(self,
@@ -1099,8 +1146,8 @@ class Encoder(Module):
     Args:
       inputs: input word ids. Optional if dense data are provided.
       encoder_mask: the encoder self-attention mask.
-      dense_inputs: dense input data. Concat after the embedding if word ids
-        are provided.
+      dense_inputs: dense input data. Concat after the embedding if word ids are
+        provided.
       training: whether it is training pass, affecting dropouts.
 
     Returns:
@@ -1113,7 +1160,7 @@ class Encoder(Module):
     inputs_array = []
     if inputs is not None:
       inputs_array.append(
-          self.input_embed(inputs, one_hot=cfg.one_hot_embedding))
+          self.input_embed(inputs, one_hot=cfg.one_hot_embedding))  # pyrefly: ignore[not-callable]
     if dense_inputs is not None:
       inputs_array.append(dense_inputs)
     if not inputs_array:
@@ -1127,26 +1174,25 @@ class Encoder(Module):
       input_length = tf_utils.get_shape_list(inputs)[1]
     else:
       input_length = 0
-    position_bias = self.relative_embedding(input_length, input_length)
-    if dense_inputs is not None:
-      # Here we ignore relative position bias for dense embeddings.
-      # TODO(yejiayu): If we proceed to video use cases, rework this part.
-      dense_input_length = tf_utils.get_shape_list(dense_inputs)[1]
-      # Position bias shape: [batch, 1, len, len]
-      paddings = tf.constant([[0, 0], [0, 0], [0, dense_input_length],
-                              [0, dense_input_length]])
-      position_bias = tf.pad(position_bias, paddings, "CONSTANT")
 
+    attention_outputs = []
     for i in range(cfg.num_layers):
+      position_bias = self.get_relpos_bias(input_length, dense_inputs, i)
       x = self.encoder_layers[i](
           x,
           attention_mask=encoder_mask,
           position_bias=position_bias,
           training=training)
+      if self.config.return_attention_scores:
+        x, attention_scores = x
+        attention_outputs.append(attention_scores)
 
     encoded = self.output_norm(x)
     encoded = self.output_dropout(encoded, training=training)
-    return encoded
+    if self.config.return_attention_scores:
+      return encoded, attention_outputs
+    else:
+      return encoded
 
 
 class Decoder(Module):
@@ -1180,17 +1226,34 @@ class Decoder(Module):
         self.target_embed = shared_embedding
       self.target_dropout = Dropout(self.config.dropout_rate,)
       # Position bias for the target self attention.
-      self.relative_embedding = RelativePositionEmbedding(
-          num_heads=self.config.num_heads,
-          relative_attention_num_buckets=self.config
-          .relative_attention_num_buckets,
-          relative_attention_max_distance=self.config
-          .relative_attention_max_distance,
-          bidirectional=self.config.bidirectional,
-          embeddings_initializer=self.config.relative_embeddings_initializer,
-          dtype=self.dtype,
-          compute_dtype=self.compute_dtype,
-          name="relative_posemb")
+      if config.use_shared_relative_position_bias:
+        self.relative_embedding = RelativePositionEmbedding(
+            num_heads=self.config.num_heads,
+            relative_attention_num_buckets=self.config
+            .relative_attention_num_buckets,
+            relative_attention_max_distance=self.config
+            .relative_attention_max_distance,
+            bidirectional=self.config.bidirectional,
+            embeddings_initializer=self.config.relative_embeddings_initializer,
+            dtype=self.dtype,
+            compute_dtype=self.compute_dtype,
+            name="relative_posemb")
+      else:
+        self.relative_embeddings = []
+        for layer_idx in range(self.config.num_decoder_layers):
+          relative_embedding = RelativePositionEmbedding(
+              num_heads=self.config.num_heads,
+              relative_attention_num_buckets=self.config
+              .relative_attention_num_buckets,
+              relative_attention_max_distance=self.config
+              .relative_attention_max_distance,
+              bidirectional=self.config.bidirectional,
+              embeddings_initializer=self.config
+              .relative_embeddings_initializer,
+              dtype=self.dtype,
+              compute_dtype=self.compute_dtype,
+              name=f"relative_posemb_{layer_idx}")
+          self.relative_embeddings.append(relative_embedding)
       self.decoder_layers = []
       for layer_idx in range(self.config.num_decoder_layers):
         if self.config.layer_sharing and layer_idx > 0:
@@ -1222,6 +1285,13 @@ class Decoder(Module):
             use_bias=False,
             dtype=self.dtype,
             name="logits")
+
+  @tf.Module.with_name_scope
+  def get_relpos_bias(self, input_length: int, layer_idx: int) -> tf.Tensor:
+    if self.config.use_shared_relative_position_bias:
+      return self.relative_embedding(input_length, input_length)
+    else:
+      return self.relative_embeddings[layer_idx](input_length, input_length)
 
   @tf.Module.with_name_scope
   def __call__(self,
@@ -1262,16 +1332,18 @@ class Decoder(Module):
       decoder_mask = tf.cast(decoder_mask, self.compute_dtype)
     if encoder_decoder_mask is not None:
       encoder_decoder_mask = tf.cast(encoder_decoder_mask, self.compute_dtype)
-    x = self.target_embed(decoder_input_tokens, one_hot=cfg.one_hot_embedding)
+    x = self.target_embed(decoder_input_tokens, one_hot=cfg.one_hot_embedding)  # pyrefly: ignore[not-callable]
     tensor_shape = tf_utils.get_shape_list(x)
     tensor_shape[-2] = 1
     x = self.target_dropout(x, noise_shape=tensor_shape, training=training)
-    if cache is not None:
-      position_bias = self.relative_embedding(max_decode_len, max_decode_len)
-    else:
-      input_length = tf_utils.get_shape_list(decoder_input_tokens)[1]
-      position_bias = self.relative_embedding(input_length, input_length)
-    for i in range(cfg.num_decoder_layers):
+
+    for i in range(cfg.num_decoder_layers):  # pyrefly: ignore[bad-argument-type]
+      if cache is not None:
+        position_bias = self.get_relpos_bias(max_decode_len, i)
+      else:
+        input_length = tf_utils.get_shape_list(decoder_input_tokens)[1]
+        position_bias = self.get_relpos_bias(input_length, i)
+
       if cache is None:
         x, _ = self.decoder_layers[i](
             x,
@@ -1315,6 +1387,7 @@ class T5Transformer(Module):
     # Builds the model components.
     shared_embedding = config.shared_embedding
     self.compute_dtype = compute_dtype
+    self.config = config
     self.decoder_cfg = dataclasses.replace(config, bidirectional=False)
     if self.decoder_cfg.num_decoder_layers is None:
       self.decoder_cfg.num_decoder_layers = self.decoder_cfg.num_layers
@@ -1332,12 +1405,12 @@ class T5Transformer(Module):
         self.shared_embedding = None
       self.encoder = Encoder(
           self.encoder_cfg,
-          self.shared_embedding,
+          self.shared_embedding,  # pyrefly: ignore[bad-argument-type]
           dtype=self.dtype,
           compute_dtype=self.compute_dtype)
       self.decoder = Decoder(
           self.decoder_cfg,
-          self.shared_embedding,
+          self.shared_embedding,  # pyrefly: ignore[bad-argument-type]
           dtype=self.dtype,
           compute_dtype=self.compute_dtype)
 
@@ -1498,6 +1571,8 @@ class T5Transformer(Module):
         encoder_dense_inputs=encoder_dense_inputs,
         encoder_dense_segment_ids=encoder_dense_segment_ids,
         training=training)
+    if self.config.return_attention_scores:
+      encoded, attn_scores = encoded
     outputs = self.decode(
         encoded=encoded,
         decoder_target_tokens=decoder_target_tokens,
@@ -1509,6 +1584,8 @@ class T5Transformer(Module):
         decoder_segment_ids=decoder_segment_ids,
         training=training)
     outputs["encoded"] = encoded
+    if self.config.return_attention_scores:
+      outputs["attention_scores"] = attn_scores  # pyrefly: ignore[unbound-name]
     return outputs
 
   @property

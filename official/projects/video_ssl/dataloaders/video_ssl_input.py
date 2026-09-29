@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 from typing import Dict, Optional, Tuple
 
 from absl import logging
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 from official.projects.video_ssl.configs import video_ssl as exp_cfg
 from official.projects.video_ssl.ops import video_ssl_preprocess_ops
 from official.vision.dataloaders import video_input
@@ -120,8 +120,8 @@ def _process_image(image: tf.Tensor,
 
   # Cast the frames in float32, normalizing according to zero_centering_image.
   if is_training and is_ssl:
-    image_1 = preprocess_ops_3d.normalize_image(image_1, zero_centering_image)
-    image_2 = preprocess_ops_3d.normalize_image(image_2, zero_centering_image)
+    image_1 = preprocess_ops_3d.normalize_image(image_1, zero_centering_image)  # pyrefly: ignore[unbound-name]
+    image_2 = preprocess_ops_3d.normalize_image(image_2, zero_centering_image)  # pyrefly: ignore[unbound-name]
 
   else:
     image = preprocess_ops_3d.normalize_image(image, zero_centering_image)
@@ -129,11 +129,11 @@ def _process_image(image: tf.Tensor,
   # Self-supervised pre-training augmentations.
   if is_training and is_ssl:
     if zero_centering_image:
-      image_1 = 0.5 * (image_1 + 1.0)
-      image_2 = 0.5 * (image_2 + 1.0)
+      image_1 = 0.5 * (image_1 + 1.0)  # pyrefly: ignore[unbound-name]
+      image_2 = 0.5 * (image_2 + 1.0)  # pyrefly: ignore[unbound-name]
     # Temporally consistent color jittering.
-    image_1 = video_ssl_preprocess_ops.random_color_jitter_3d(image_1)
-    image_2 = video_ssl_preprocess_ops.random_color_jitter_3d(image_2)
+    image_1 = video_ssl_preprocess_ops.random_color_jitter_3d(image_1)  # pyrefly: ignore[unbound-name]
+    image_2 = video_ssl_preprocess_ops.random_color_jitter_3d(image_2)  # pyrefly: ignore[unbound-name]
     # Temporally consistent gaussian blurring.
     image_1 = video_ssl_preprocess_ops.random_blur(image_1, crop_size,
                                                    crop_size, 1.0)
@@ -221,7 +221,7 @@ class Parser(video_input.Parser):
                input_params: exp_cfg.DataConfig,
                image_key: str = IMAGE_KEY,
                label_key: str = LABEL_KEY):
-    super(Parser, self).__init__(input_params, image_key, label_key)
+    super().__init__(input_params, image_key, label_key)
     self._is_ssl = input_params.is_ssl
 
   def _parse_train_data(

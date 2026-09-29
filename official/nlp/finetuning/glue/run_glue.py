@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ from absl import flags
 from absl import logging
 
 import gin
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 from official.common import distribute_utils
 # Imports registered experiment configs.
@@ -45,6 +45,22 @@ flags.DEFINE_string(
     'The Cloud TPU to use for training. This should be either the name '
     'used when creating the Cloud TPU, or a grpc://ip.address.of.tpu:8470 url.')
 flags.DEFINE_integer('num_gpus', 1, 'The number of GPUs to use at each worker.')
+
+_MODE = flags.DEFINE_enum(
+    'mode', 'train_eval_and_predict',
+    ['train_eval_and_predict', 'train_eval', 'predict'],
+    'The mode to run the binary. If `train_eval_and_predict` '
+    'it will (1) train on the training data and (2) evaluate on '
+    'the validation data and (3) finally generate predictions '
+    'on the prediction data; if `train_eval`, it will only '
+    'run training and evaluation; if `predict`, it will only '
+    'run prediction using the model in `model_dir`.')
+
+# TODO(kitsing) The `params_override` flag is currently not being used.
+# Only declared to make xm_job_3p.XMTPUJob happy.
+_PARAMS_OVERRIDE = flags.DEFINE_string(
+    'params_override', '', 'Overridden parameters.'
+)
 
 FLAGS = flags.FLAGS
 
@@ -234,7 +250,7 @@ def main(argv):
 
   with distribution_strategy.scope():
     task = None
-    if 'train_eval' in FLAGS.mode:
+    if 'train_eval' in _MODE.value:
       logging.info('Starting training and eval...')
       logging.info('Model dir: %s', FLAGS.model_dir)
 
@@ -250,7 +266,7 @@ def main(argv):
           params=exp_config,
           model_dir=FLAGS.model_dir)
 
-    if 'predict' in FLAGS.mode:
+    if 'predict' in _MODE.value:
       logging.info('Starting predict...')
       # When mode is `predict`, `task` will be None.
       if task is None:

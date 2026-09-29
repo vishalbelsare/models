@@ -1,4 +1,4 @@
-# Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,10 +17,8 @@
 import math
 from typing import Any, List, Optional, Tuple
 
-# Import libraries
-
 from absl import logging
-import tensorflow as tf
+import tensorflow as tf, tf_keras
 
 from official.modeling import hyperparams
 from official.modeling import tf_utils
@@ -29,7 +27,7 @@ from official.vision.modeling.layers import nn_blocks
 from official.vision.modeling.layers import nn_layers
 from official.vision.ops import spatial_transform_ops
 
-layers = tf.keras.layers
+layers = tf_keras.layers
 
 FILTER_SIZE_MAP = {
     1: 32,
@@ -124,8 +122,8 @@ def build_block_specs(
   return [BlockSpec(*b) for b in block_specs]
 
 
-@tf.keras.utils.register_keras_serializable(package='Vision')
-class SpineNet(tf.keras.Model):
+@tf_keras.utils.register_keras_serializable(package='Vision')
+class SpineNet(tf_keras.Model):
   """Creates a SpineNet family model.
 
   This implements:
@@ -137,19 +135,19 @@ class SpineNet(tf.keras.Model):
 
   def __init__(
       self,
-      input_specs: tf.keras.layers.InputSpec = tf.keras.layers.InputSpec(
+      input_specs: tf_keras.layers.InputSpec = tf_keras.layers.InputSpec(
           shape=[None, None, None, 3]),
       min_level: int = 3,
       max_level: int = 7,
-      block_specs: List[BlockSpec] = build_block_specs(),
+      block_specs: Optional[List[BlockSpec]] = None,
       endpoints_num_filters: int = 256,
       resample_alpha: float = 0.5,
       block_repeats: int = 1,
       filter_size_scale: float = 1.0,
       init_stochastic_depth_rate: float = 0.0,
       kernel_initializer: str = 'VarianceScaling',
-      kernel_regularizer: Optional[tf.keras.regularizers.Regularizer] = None,
-      bias_regularizer: Optional[tf.keras.regularizers.Regularizer] = None,
+      kernel_regularizer: Optional[tf_keras.regularizers.Regularizer] = None,
+      bias_regularizer: Optional[tf_keras.regularizers.Regularizer] = None,
       activation: str = 'relu',
       use_sync_bn: bool = False,
       norm_momentum: float = 0.99,
@@ -158,7 +156,7 @@ class SpineNet(tf.keras.Model):
     """Initializes a SpineNet model.
 
     Args:
-      input_specs: A `tf.keras.layers.InputSpec` of the input tensor.
+      input_specs: A `tf_keras.layers.InputSpec` of the input tensor.
       min_level: An `int` of min level for output mutiscale features.
       max_level: An `int` of max level for output mutiscale features.
       block_specs: A list of block specifications for the SpineNet model
@@ -173,9 +171,9 @@ class SpineNet(tf.keras.Model):
         of parameters or computation cost of the model.
       init_stochastic_depth_rate: A `float` of initial stochastic depth rate.
       kernel_initializer: A str for kernel initializer of convolutional layers.
-      kernel_regularizer: A `tf.keras.regularizers.Regularizer` object for
+      kernel_regularizer: A `tf_keras.regularizers.Regularizer` object for
         Conv2D. Default to None.
-      bias_regularizer: A `tf.keras.regularizers.Regularizer` object for Conv2D.
+      bias_regularizer: A `tf_keras.regularizers.Regularizer` object for Conv2D.
         Default to None.
       activation: A `str` name of the activation function.
       use_sync_bn: If True, use synchronized batch normalization.
@@ -186,7 +184,9 @@ class SpineNet(tf.keras.Model):
     self._input_specs = input_specs
     self._min_level = min_level
     self._max_level = max_level
-    self._block_specs = block_specs
+    self._block_specs = (
+        build_block_specs() if block_specs is None else block_specs
+    )
     self._endpoints_num_filters = endpoints_num_filters
     self._resample_alpha = resample_alpha
     self._block_repeats = block_repeats
@@ -203,24 +203,20 @@ class SpineNet(tf.keras.Model):
     self._num_init_blocks = 2
 
     self._set_activation_fn(activation)
+    self._norm = layers.BatchNormalization
 
-    if use_sync_bn:
-      self._norm = layers.experimental.SyncBatchNormalization
-    else:
-      self._norm = layers.BatchNormalization
-
-    if tf.keras.backend.image_data_format() == 'channels_last':
+    if tf_keras.backend.image_data_format() == 'channels_last':
       self._bn_axis = -1
     else:
       self._bn_axis = 1
 
     # Build SpineNet.
-    inputs = tf.keras.Input(shape=input_specs.shape[1:])
+    inputs = tf_keras.Input(shape=input_specs.shape[1:])
 
     net = self._build_stem(inputs=inputs)
     input_width = input_specs.shape[2]
     if input_width is None:
-      max_stride = max(map(lambda b: b.level, block_specs))
+      max_stride = max(map(lambda b: b.level, self._block_specs))
       input_width = 2 ** max_stride
     net = self._build_scale_permuted_network(net=net, input_width=input_width)
     endpoints = self._build_endpoints(net=net)
@@ -301,7 +297,8 @@ class SpineNet(tf.keras.Model):
     x = self._norm(
         axis=self._bn_axis,
         momentum=self._norm_momentum,
-        epsilon=self._norm_epsilon)(
+        epsilon=self._norm_epsilon,
+        synchronized=self._use_sync_bn)(
             x)
     x = tf_utils.get_activation(self._activation_fn)(x)
     x = layers.MaxPool2D(pool_size=3, strides=2, padding='same')(x)
@@ -432,7 +429,8 @@ class SpineNet(tf.keras.Model):
       x = self._norm(
           axis=self._bn_axis,
           momentum=self._norm_momentum,
-          epsilon=self._norm_epsilon)(
+          epsilon=self._norm_epsilon,
+          synchronized=self._use_sync_bn)(
               x)
       x = tf_utils.get_activation(self._activation_fn)(x)
       endpoints[str(level)] = x
@@ -464,7 +462,8 @@ class SpineNet(tf.keras.Model):
     x = self._norm(
         axis=self._bn_axis,
         momentum=self._norm_momentum,
-        epsilon=self._norm_epsilon)(
+        epsilon=self._norm_epsilon,
+        synchronized=self._use_sync_bn)(
             x)
     x = tf_utils.get_activation(self._activation_fn)(x)
 
@@ -483,7 +482,8 @@ class SpineNet(tf.keras.Model):
       x = self._norm(
           axis=self._bn_axis,
           momentum=self._norm_momentum,
-          epsilon=self._norm_epsilon)(
+          epsilon=self._norm_epsilon,
+          synchronized=self._use_sync_bn)(
               x)
       x = tf_utils.get_activation(self._activation_fn)(x)
       input_width /= 2
@@ -509,7 +509,8 @@ class SpineNet(tf.keras.Model):
     x = self._norm(
         axis=self._bn_axis,
         momentum=self._norm_momentum,
-        epsilon=self._norm_epsilon)(
+        epsilon=self._norm_epsilon,
+        synchronized=self._use_sync_bn)(
             x)
     return x
 
@@ -544,17 +545,17 @@ class SpineNet(tf.keras.Model):
 
 @factory.register_backbone_builder('spinenet')
 def build_spinenet(
-    input_specs: tf.keras.layers.InputSpec,
+    input_specs: tf_keras.layers.InputSpec,
     backbone_config: hyperparams.Config,
     norm_activation_config: hyperparams.Config,
-    l2_regularizer: tf.keras.regularizers.Regularizer = None) -> tf.keras.Model:
+    l2_regularizer: tf_keras.regularizers.Regularizer = None) -> tf_keras.Model:
   """Builds SpineNet backbone from a config."""
   backbone_type = backbone_config.type
   backbone_cfg = backbone_config.get()
   assert backbone_type == 'spinenet', (f'Inconsistent backbone type '
                                        f'{backbone_type}')
 
-  model_id = backbone_cfg.model_id
+  model_id = str(backbone_cfg.model_id)
   if model_id not in SCALING_MAP:
     raise ValueError(
         'SpineNet-{} is not a valid architecture.'.format(model_id))
